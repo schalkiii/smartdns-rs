@@ -1,0 +1,93 @@
+name: WebUI Build
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'webui/**'
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/web-ui.yml'
+  workflow_dispatch:
+
+jobs:
+  webui:
+    name: Build WebUI Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: webui/package-lock.json
+
+      - name: Build frontend
+        run: |
+          cd webui
+          npm ci
+          npm run build
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: webui-out
+          retention-days: 1
+          path: webui/out/
+
+  build:
+    name: ${{ matrix.target }}
+    needs: webui
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            suffix: ""
+            archive: tar.gz
+          - target: x86_64-pc-windows-gnu
+            suffix: ".exe"
+            archive: zip
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download webui static files
+        uses: actions/download-artifact@v7
+        with:
+          name: webui-out
+          path: webui/out/
+
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup
+        with:
+          rust_target: ${{ matrix.target }}
+
+      - name: Build
+        run: cross build --release --features web-ui --target ${{ matrix.target }}
+
+      - name: Package
+        run: |
+          DIST_NAME="smartdns-${{ matrix.target }}"
+          DIST_DIR="dist/${DIST_NAME}"
+          mkdir -p "${DIST_DIR}"
+          cp "target/${{ matrix.target }}/release/smartdns${{ matrix.suffix }}" "${DIST_DIR}/"
+          cp LICENSE README.md etc/smartdns/smartdns.conf "${DIST_DIR}/" 2>/dev/null || true
+          echo "Version: $(cargo pkgid | cut -d@ -f2)" > "${DIST_DIR}/version"
+          echo "Build date: $(date)" >> "${DIST_DIR}/version"
+          echo "Commit: $(git rev-parse HEAD)" >> "${DIST_DIR}/version"
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            cd dist && zip -9r "${DIST_NAME}.zip" "${DIST_NAME}"
+          else
+            cd dist && tar -zcvf "${DIST_NAME}.tar.gz" "${DIST_NAME}"
+          fi
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: smartdns-${{ matrix.target }}
+          retention-days: 30
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
