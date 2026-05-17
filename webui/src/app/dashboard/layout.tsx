@@ -1,8 +1,6 @@
 'use client';
 
-import { useState } from 'react';
-import { usePathname } from 'next/navigation';
-import Link from 'next/link';
+import { createContext, useContext, useState } from 'react';
 import Box from '@mui/material/Box';
 import Drawer from '@mui/material/Drawer';
 import AppBar from '@mui/material/AppBar';
@@ -23,11 +21,27 @@ import MenuIcon from '@mui/icons-material/Menu';
 
 const DRAWER_WIDTH = 240;
 
-const navItems = [
-  { label: '系统概览', icon: <DashboardIcon />, href: '/dashboard' },
-  { label: '上游服务器', icon: <DnsIcon />, href: '/dashboard/upstream' },
-  { label: '缓存管理', icon: <StorageIcon />, href: '/dashboard/cache' },
-  { label: '规则管理', icon: <RuleIcon />, href: '/dashboard/rules' },
+export type DashboardTab = 'overview' | 'upstream' | 'cache' | 'rules';
+
+interface DashboardTabContextType {
+  currentTab: DashboardTab;
+  setCurrentTab: (tab: DashboardTab) => void;
+}
+
+const DashboardTabContext = createContext<DashboardTabContextType>({
+  currentTab: 'overview',
+  setCurrentTab: () => {},
+});
+
+export function useDashboardTab() {
+  return useContext(DashboardTabContext);
+}
+
+const navItems: { label: string; icon: React.ReactNode; tab: DashboardTab }[] = [
+  { label: '系统概览', icon: <DashboardIcon />, tab: 'overview' },
+  { label: '上游服务器', icon: <DnsIcon />, tab: 'upstream' },
+  { label: '缓存管理', icon: <StorageIcon />, tab: 'cache' },
+  { label: '规则管理', icon: <RuleIcon />, tab: 'rules' },
 ];
 
 export default function DashboardLayout({
@@ -35,7 +49,7 @@ export default function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const pathname = usePathname();
+  const [currentTab, setCurrentTab] = useState<DashboardTab>('overview');
   const [mobileOpen, setMobileOpen] = useState(false);
 
   const drawer = (
@@ -48,11 +62,13 @@ export default function DashboardLayout({
       <Divider />
       <List>
         {navItems.map((item) => (
-          <ListItem key={item.href} disablePadding>
+          <ListItem key={item.tab} disablePadding>
             <ListItemButton
-              component={Link}
-              href={item.href}
-              selected={pathname === item.href}
+              onClick={() => {
+                setCurrentTab(item.tab);
+                setMobileOpen(false);
+              }}
+              selected={currentTab === item.tab}
               sx={{
                 borderRadius: 0,
                 '&.Mui-selected': {
@@ -63,7 +79,8 @@ export default function DashboardLayout({
             >
               <ListItemIcon
                 sx={{
-                  color: pathname === item.href ? 'primary.main' : 'inherit',
+                  color:
+                    currentTab === item.tab ? 'primary.main' : 'inherit',
                 }}
               >
                 {item.icon}
@@ -77,67 +94,69 @@ export default function DashboardLayout({
   );
 
   return (
-    <Box sx={{ display: 'flex', minHeight: '100vh' }}>
-      <AppBar
-        position="fixed"
-        sx={{ zIndex: (theme) => theme.zIndex.drawer + 1 }}
-      >
-        <Toolbar>
-          <IconButton
-            color="inherit"
-            edge="start"
-            onClick={() => setMobileOpen(!mobileOpen)}
-            sx={{ mr: 2, display: { md: 'none' } }}
-          >
-            <MenuIcon />
-          </IconButton>
-          <Typography variant="h6" noWrap>
-            SmartDNS Dashboard
-          </Typography>
-        </Toolbar>
-      </AppBar>
-      <Drawer
-        variant="permanent"
-        sx={{
-          width: DRAWER_WIDTH,
-          flexShrink: 0,
-          display: { xs: 'none', md: 'block' },
-          '& .MuiDrawer-paper': {
+    <DashboardTabContext.Provider value={{ currentTab, setCurrentTab }}>
+      <Box sx={{ display: 'flex', minHeight: '100vh' }}>
+        <AppBar
+          position="fixed"
+          sx={{ zIndex: (theme) => theme.zIndex.drawer + 1 }}
+        >
+          <Toolbar>
+            <IconButton
+              color="inherit"
+              edge="start"
+              onClick={() => setMobileOpen(!mobileOpen)}
+              sx={{ mr: 2, display: { md: 'none' } }}
+            >
+              <MenuIcon />
+            </IconButton>
+            <Typography variant="h6" noWrap>
+              SmartDNS Dashboard
+            </Typography>
+          </Toolbar>
+        </AppBar>
+        <Drawer
+          variant="permanent"
+          sx={{
             width: DRAWER_WIDTH,
-            boxSizing: 'border-box',
-          },
-        }}
-        open
-      >
-        {drawer}
-      </Drawer>
-      <Drawer
-        variant="temporary"
-        open={mobileOpen}
-        onClose={() => setMobileOpen(false)}
-        ModalProps={{ keepMounted: true }}
-        sx={{
-          display: { xs: 'block', md: 'none' },
-          '& .MuiDrawer-paper': {
-            width: DRAWER_WIDTH,
-            boxSizing: 'border-box',
-          },
-        }}
-      >
-        {drawer}
-      </Drawer>
-      <Box
-        component="main"
-        sx={{
-          flexGrow: 1,
-          p: 3,
-          mt: 8,
-          width: { md: `calc(100% - ${DRAWER_WIDTH}px)` },
-          minHeight: 'calc(100vh - 64px)',
-        }}
-      >
-        {children}
+            flexShrink: 0,
+            display: { xs: 'none', md: 'block' },
+            '& .MuiDrawer-paper': {
+              width: DRAWER_WIDTH,
+              boxSizing: 'border-box',
+            },
+          }}
+          open
+        >
+          {drawer}
+        </Drawer>
+        <Drawer
+          variant="temporary"
+          open={mobileOpen}
+          onClose={() => setMobileOpen(false)}
+          ModalProps={{ keepMounted: true }}
+          sx={{
+            display: { xs: 'block', md: 'none' },
+            '& .MuiDrawer-paper': {
+              width: DRAWER_WIDTH,
+              boxSizing: 'border-box',
+            },
+          }}
+        >
+          {drawer}
+        </Drawer>
+        <Box
+          component="main"
+          sx={{
+            flexGrow: 1,
+            p: 3,
+            mt: 8,
+            width: { md: `calc(100% - ${DRAWER_WIDTH}px)` },
+            minHeight: 'calc(100vh - 64px)',
+          }}
+        >
+          {children}
+        </Box>
       </Box>
-    </Box>
+    </DashboardTabContext.Provider>
   );
 }

@@ -3,12 +3,12 @@ use std::{
     ops::{Deref, DerefMut},
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
 use tokio::{
-    sync::{RwLock, Semaphore},
+    sync::{Mutex, RwLock, Semaphore},
     task::JoinSet,
 };
 
@@ -26,6 +26,14 @@ use crate::{
 
 #[derive(Clone)]
 pub struct App(Arc<AppState>);
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[cfg_attr(feature = "web-ui", derive(utoipa::ToSchema))]
+pub struct StatsSnapshot {
+    pub timestamp: u64,
+    pub total_queries: u64,
+    pub cache_hits: u64,
+}
 
 impl App {
     fn new(cfg: Arc<RuntimeConfig>) -> (IncomingDnsRequest, Self) {
@@ -45,6 +53,9 @@ impl App {
                     uptime: Instant::now(),
                     loaded_at: RwLock::const_new(Instant::now()),
                     active_queries: Default::default(),
+                    total_queries: AtomicU64::new(0),
+                    total_query_time_ns: AtomicU64::new(0),
+                    stats_history: Mutex::const_new(Vec::new()),
                     guard: AppGuard,
                 }
                 .into(),
@@ -84,6 +95,40 @@ impl App {
 
     pub fn active_queries(&self) -> usize {
         self.active_queries.load(Ordering::Relaxed)
+    }
+
+    pub fn total_queries(&self) -> u64 {
+        self.total_queries.load(Ordering::Relaxed)
+    }
+
+    pub fn avg_query_time_ms(&self) -> f64 {
+        let total = self.total_queries.load(Ordering::Relaxed);
+        if total == 0 {
+            return 0.0;
+        }
+        let time_ns = self.total_query_time_ns.load(Ordering::Relaxed);
+        time_ns as f64 / total as f64 / 1_000_000.0
+    }
+
+    pub async fn add_stats_snapshot(&self, cache_hits: u64) {
+        let mut history = self.stats_history.lock().await;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let total = self.total_queries();
+        history.push(StatsSnapshot {
+            timestamp: now,
+            total_queries: total,
+            cache_hits,
+        });
+        if history.len() > 120 {
+            history.remove(0);
+        }
+    }
+
+    pub async fn stats_history(&self) -> Vec<StatsSnapshot> {
+        self.stats_history.lock().await.clone()
     }
 
     async fn init(&self) {
@@ -199,6 +244,9 @@ pub struct AppState {
     uptime: Instant,
     loaded_at: RwLock<Instant>,
     active_queries: AtomicUsize,
+    total_queries: AtomicU64,
+    total_query_time_ns: AtomicU64,
+    stats_history: Mutex<Vec<StatsSnapshot>>,
     guard: AppGuard,
 }
 
@@ -260,6 +308,7 @@ pub fn serve(cfg: Arc<RuntimeConfig>) {
                 }
 
                 app.active_queries.fetch_add(count, Ordering::Relaxed);
+                app.total_queries.fetch_add(count as u64, Ordering::Relaxed);
 
                 let handler = app.mw_handler.read().await.clone();
 

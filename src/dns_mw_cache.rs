@@ -229,6 +229,9 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
                             );
 
                             ctx.source = LookupFrom::Cache;
+                            self.cache
+                                .query_hits
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             return Ok(res);
                         }
                         CacheStatus::Expired if ctx.cfg().serve_expired() && !no_serve_expired => {
@@ -249,6 +252,9 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
                                 query.query_type()
                             );
                             ctx.source = LookupFrom::Cache;
+                            self.cache
+                                .query_hits
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             return Ok(res);
                         }
                         _ => Some(res),
@@ -374,6 +380,7 @@ pub struct DnsCache {
     serve_expired: bool,
     expired_ttl: u64,
     expired_reply_ttl: u64,
+    query_hits: std::sync::atomic::AtomicU64,
 }
 
 impl DnsCache {
@@ -392,6 +399,7 @@ impl DnsCache {
             serve_expired,
             expired_ttl,
             expired_reply_ttl,
+            query_hits: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -417,6 +425,10 @@ impl DnsCache {
                 last_access: entry.stats.last_access,
             })
             .collect()
+    }
+
+    pub fn query_hits(&self) -> u64 {
+        self.query_hits.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     async fn insert(

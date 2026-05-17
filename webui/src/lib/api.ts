@@ -21,6 +21,9 @@ async function apiPost<T>(path: string, body?: unknown): Promise<T> {
   if (!res.ok) {
     throw new Error(`API error: ${res.status} ${res.statusText}`);
   }
+  if (res.status === 204) {
+    return undefined as T;
+  }
   return res.json();
 }
 
@@ -33,7 +36,16 @@ async function apiDelete<T>(path: string, body?: unknown): Promise<T> {
   if (!res.ok) {
     throw new Error(`API error: ${res.status} ${res.statusText}`);
   }
+  if (res.status === 204) {
+    return undefined as T;
+  }
   return res.json();
+}
+
+export interface StatsSnapshot {
+  timestamp: number;
+  total_queries: number;
+  cache_hits: number;
 }
 
 export interface StatsResponse {
@@ -41,7 +53,12 @@ export interface StatsResponse {
   active_queries: number;
   cache_size: number;
   cache_hits: number;
+  cache_query_hits: number;
+  total_queries: number;
+  cache_hit_rate: number;
+  avg_query_time_ms: number;
   version: string;
+  history: StatsSnapshot[];
 }
 
 export interface SystemStatusResponse {
@@ -97,7 +114,7 @@ export interface ListenersResponse {
 
 export interface AddressEntry {
   domain: string;
-  ip: string;
+  address: string;
   [key: string]: unknown;
 }
 
@@ -201,7 +218,7 @@ export function useAddresses() {
 export function useCreateAddress() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (rule: { domain: string; ip: string }) =>
+    mutationFn: (rule: { domain: string; address: string }) =>
       apiPost<void>('/api/addresses', { rule }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: addressesKeys });
