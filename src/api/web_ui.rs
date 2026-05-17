@@ -46,8 +46,13 @@ pub fn routes() -> Router<Arc<ServeState>> {
                 return response;
             }
 
-            let dashboard_path = format!("dashboard/{path}.html");
+            let dashboard_path = format!("dashboard/{path}");
             if let Some(response) = try_serve(&dashboard_path) {
+                return response;
+            }
+
+            let dashboard_html = format!("dashboard/{path}.html");
+            if let Some(response) = try_serve(&dashboard_html) {
                 return response;
             }
 

@@ -36,6 +36,12 @@ async function apiDelete<T>(path: string, body?: unknown): Promise<T> {
   return res.json();
 }
 
+export interface StatsSnapshot {
+  timestamp: number;
+  total_queries: number;
+  cache_hits: number;
+}
+
 export interface StatsResponse {
   uptime_secs: number;
   active_queries: number;
@@ -45,6 +51,7 @@ export interface StatsResponse {
   cache_hit_rate: number;
   avg_query_time_ms: number;
   version: string;
+  history: StatsSnapshot[];
 }
 
 export interface SystemStatusResponse {

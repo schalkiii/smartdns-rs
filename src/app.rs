@@ -12,6 +12,13 @@ use tokio::{
     task::JoinSet,
 };
 
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+pub struct StatsSnapshot {
+    pub timestamp: u64,
+    pub total_queries: u64,
+    pub cache_hits: u64,
+}
+
 use crate::{
     config::ServerOpts,
     dns::{DnsRequest, DnsResponse, SerialMessage},
@@ -47,6 +54,8 @@ impl App {
                     active_queries: Default::default(),
                     total_queries: Default::default(),
                     total_query_time_ns: Default::default(),
+                    stats_history: Default::default(),
+                    initial_cache_hits: AtomicU64::new(u64::MAX),
                     guard: AppGuard,
                 }
                 .into(),
@@ -105,11 +114,44 @@ impl App {
     }
 
     pub fn cache_hit_rate(&self, cache_hits: u64) -> f64 {
+        let _ = self.initial_cache_hits.compare_exchange(
+            u64::MAX,
+            cache_hits,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+        let initial = self.initial_cache_hits.load(Ordering::Relaxed);
+        let recent_hits = if initial == u64::MAX {
+            0
+        } else {
+            cache_hits.saturating_sub(initial)
+        };
         let total = self.total_queries();
-        if total == 0 {
+        if total == 0 || recent_hits == 0 {
             return 0.0;
         }
-        cache_hits as f64 / total as f64 * 100.0
+        (recent_hits as f64 / total as f64 * 100.0).min(100.0)
+    }
+
+    pub async fn add_stats_snapshot(&self, cache_hits: u64) {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let mut history = self.stats_history.write().await;
+        history.push(StatsSnapshot {
+            timestamp,
+            total_queries: self.total_queries(),
+            cache_hits,
+        });
+        if history.len() > 60 {
+            history.remove(0);
+        }
+    }
+
+    pub async fn stats_history(&self) -> Vec<StatsSnapshot> {
+        self.stats_history.read().await.clone()
     }
 
     async fn init(&self) {
@@ -227,6 +269,8 @@ pub struct AppState {
     active_queries: AtomicUsize,
     total_queries: AtomicU64,
     total_query_time_ns: AtomicU64,
+    stats_history: RwLock<Vec<StatsSnapshot>>,
+    initial_cache_hits: AtomicU64,
     guard: AppGuard,
 }
 

@@ -97,34 +97,44 @@ export default function DashboardOverview() {
 
   const chartSeries = [
     {
-      name: '缓存命中',
-      data: stats != null ? [stats.cache_hits] : [0],
+      name: '总查询数',
+      data: (stats?.history?.length ? stats.history : [{ timestamp: 0, total_queries: stats?.total_queries ?? 0, cache_hits: stats?.cache_hits ?? 0 }])
+        .map((p) => ({ x: p.timestamp * 1000, y: p.total_queries })),
     },
     {
-      name: '总查询数',
-      data: stats != null ? [stats.total_queries] : [0],
+      name: '缓存命中',
+      data: (stats?.history?.length ? stats.history : [{ timestamp: 0, total_queries: stats?.total_queries ?? 0, cache_hits: stats?.cache_hits ?? 0 }])
+        .map((p) => ({ x: p.timestamp * 1000, y: p.cache_hits })),
     },
   ];
 
   const chartOptions: ApexOptions = {
     chart: {
-      type: 'bar',
+      type: 'area',
       background: 'transparent',
       toolbar: { show: false },
       fontFamily: '"Inter", "Roboto", "Helvetica", "Arial", sans-serif',
     },
     theme: { mode: 'dark' },
-    plotOptions: {
-      bar: {
-        horizontal: false,
-        columnWidth: '50%',
-        borderRadius: 4,
+    stroke: {
+      curve: 'smooth',
+      width: 2,
+    },
+    fill: {
+      type: 'gradient',
+      gradient: {
+        shadeIntensity: 1,
+        opacityFrom: 0.3,
+        opacityTo: 0.05,
       },
     },
     colors: ['#42a5f5', '#66bb6a'],
     xaxis: {
-      categories: ['当前统计'],
-      labels: { style: { colors: '#9ca3af' } },
+      type: 'datetime',
+      labels: {
+        style: { colors: '#9ca3af' },
+        datetimeUTC: false,
+      },
     },
     yaxis: {
       labels: { style: { colors: '#9ca3af' } },
@@ -138,12 +148,12 @@ export default function DashboardOverview() {
     },
     tooltip: {
       theme: 'dark',
+      x: {
+        format: 'HH:mm:ss',
+      },
     },
     dataLabels: {
-      enabled: true,
-      style: {
-        colors: ['#fff'],
-      },
+      enabled: false,
     },
   };
 
@@ -244,7 +254,7 @@ export default function DashboardOverview() {
       <Card sx={{ mb: 4 }}>
         <CardContent>
           <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
-            查询统计
+            查询趋势
           </Typography>
           <Box sx={{ height: 300 }}>
             <Chart

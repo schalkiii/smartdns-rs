@@ -3,6 +3,8 @@ use std::sync::Arc;
 use axum::{Json, extract::State};
 use serde::Serialize;
 
+use crate::app::StatsSnapshot;
+
 use super::openapi::{IntoRouter, ToSchema, http::get, routes};
 use super::{ServeState, StatefulRouter};
 
@@ -15,11 +17,12 @@ struct DnsStats {
     uptime_secs: u64,
     active_queries: usize,
     cache_size: usize,
-    cache_hits: usize,
+    cache_hits: u64,
     total_queries: u64,
     cache_hit_rate: f64,
     avg_query_time_ms: f64,
     version: &'static str,
+    history: Vec<StatsSnapshot>,
 }
 
 #[get("/stats", tag = "Stats")]
@@ -28,15 +31,18 @@ async fn stats(State(state): State<Arc<ServeState>>) -> Json<DnsStats> {
     let (cache_size, cache_hits) = if let Some(c) = app.cache().await {
         let records = c.cached_records().await;
         let size = records.len();
-        let hits: usize = records.iter().map(|r| r.hits).sum();
+        let hits: u64 = records.iter().map(|r| r.hits as u64).sum();
         (size, hits)
     } else {
         (0, 0)
     };
 
     let total_queries = app.total_queries();
-    let cache_hit_rate = app.cache_hit_rate(cache_hits as u64);
+    let cache_hit_rate = app.cache_hit_rate(cache_hits);
     let avg_query_time_ms = app.avg_query_time_ms();
+
+    app.add_stats_snapshot(cache_hits).await;
+    let history = app.stats_history().await;
 
     Json(DnsStats {
         uptime_secs: app.uptime().as_secs(),
@@ -47,5 +53,6 @@ async fn stats(State(state): State<Arc<ServeState>>) -> Json<DnsStats> {
         cache_hit_rate,
         avg_query_time_ms,
         version: crate::BUILD_VERSION,
+        history,
     })
 }
