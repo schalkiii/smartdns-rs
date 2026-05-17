@@ -3,7 +3,7 @@ name = "smartdns"
 version = "0.13.0"
 authors = ["YISH <mokeyish@hotmail.com>"]
 edition = "2024"
-rust-version = "1.93.1"
+rust-version = "1.92.0"
 
 keywords = ["DNS", "BIND", "dig", "SmartDNS", "Dnsmasq"]
 categories = ["network-programming"]
@@ -89,6 +89,11 @@ swagger-ui-embed = [
   "dep:utoipa-swagger-ui"
 ]
 
+web-ui = [
+  "dep:rust-embed",
+  "dep:mime_guess"
+]
+
 
 http_client = [
   "ureq"
@@ -147,6 +152,8 @@ tower-http = { version = "0.6.6", default-features = false, features = ["set-hea
 utoipa = { git = "https://github.com/mokeyish/utoipa.git", rev = "smartdns.1", package = "utoipa", features = ["axum_extras"] }
 utoipa-axum = { git = "https://github.com/mokeyish/utoipa.git", rev = "smartdns.1", package = "utoipa-axum", features = []}
 utoipa-swagger-ui = { git = "https://github.com/mokeyish/utoipa.git", rev = "smartdns.1", package = "utoipa-swagger-ui", optional = true, default-features = false, features = ["axum"] }
+rust-embed = { version = "8", optional = true, features = ["axum"] }
+mime_guess = { version = "2", optional = true }
 
 # serde
 serde = { version = "1.0", optional = true, features = ["derive"]}

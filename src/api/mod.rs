@@ -22,7 +22,9 @@ mod log;
 mod nameserver;
 mod openapi;
 mod serve_dns;
+mod stats;
 mod system;
+mod web_ui;
 
 use crate::{app::App, server::DnsHandle};
 
@@ -44,6 +46,8 @@ pub fn routes() -> axum::Router<Arc<ServeState>> {
         .title(crate::NAME)
         .version(crate::BUILD_VERSION)
         .build();
+
+    let router = router.nest("/dashboard", web_ui::routes());
 
     let router = {
         cfg_if! {
@@ -90,6 +94,7 @@ fn api_routes() -> StatefulRouter {
         .merge(listener::routes())
         .merge(log::routes())
         .merge(system::routes())
+        .merge(stats::routes())
 }
 
 async fn version() -> Json<&'static str> {

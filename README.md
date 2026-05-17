@@ -52,6 +52,10 @@ SmartDNS-rs 🐋 is a local DNS server imspired by [C SmartDNS](https://github.c
 
   Tokio-based multi-threaded asynchronous I/O model; caches query  results; supports most-used domain name expired prefetching, query **'0'**  milliseconds, without eliminating the impact of DoH and DoT encryption.
 
+- **Web Dashboard**
+
+  Built-in web management dashboard for real-time monitoring and configuration management. Provides system overview, upstream server status, cache management, and rule management. Access via `http://<bind-http-addr>/dashboard` when built with `--features web-ui`.
+
 Note: The C version of smartdns is very functional, but because it only supports **Linux**, while **MacOS and Windows** can only be supported through Docker or WSL. Therefore, I want to develop a rust version of SmartDNS that supports compiling to Windows, MacOS, Linux and Android Termux environment to run, and is compatible with its configuration.
 
 ---
@@ -207,7 +211,50 @@ just build --release
 sudo ./target/release/smartdns run -c ./etc/smartdns/smartdns.conf
 ```
 
+### Building with Web Dashboard
+
+To build with the built-in web dashboard:
+
+```shell
+# 1. Build the frontend
+cd webui
+npm install
+npm run build
+cd ..
+
+# 2. Build smartdns-rs with web-ui feature
+cargo build --features web-ui --release
+
+# 3. Enable HTTP server in config (e.g. bind-http :8083)
+# 4. Access dashboard at http://localhost:8083/dashboard
+```
+
+The dashboard frontend is built with Next.js and embedded into the binary via `rust-embed`. The `web-ui` feature flag is optional — without it, smartdns-rs builds and runs as normal without the dashboard.
+
 For cross-compilation, it is recommended to use [cross](https://github.com/cross-rs/cross) (requires Docker).
+
+## Dashboard API
+
+When built with the `web-ui` feature, smartdns-rs exposes additional management endpoints:
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/stats` | GET | Aggregated statistics (uptime, cache size, cache hits, active queries) |
+| `/api/system/status` | GET | System status (version, uptime, active queries) |
+| `/api/caches` | GET | List all cached DNS records |
+| `/api/caches/flush` | POST | Flush all cached records |
+| `/api/caches/config` | GET | Cache configuration |
+| `/api/nameservers` | GET | List upstream DNS servers |
+| `/api/listeners` | GET | List active listeners |
+| `/api/addresses` | GET/POST/DELETE | Manage domain-address rules |
+| `/api/forwards` | GET | List forward rules |
+| `/api/config` | GET | View current configuration |
+| `/api/config/reload` | POST | Reload configuration from disk |
+| `/api/logs/config` | GET | Log configuration |
+| `/api/audits/config` | GET | Audit configuration |
+| `/api/version` | GET | Server version |
+
+The full OpenAPI specification is available at `/api/openapi.json` and the Swagger UI at `/api/docs` (when built with `swagger-ui-*` features).
 
 ## Acknowledgments !!!
 
