@@ -27,8 +27,7 @@ use crate::{
 #[derive(Clone)]
 pub struct App(Arc<AppState>);
 
-#[derive(Debug, Clone, serde::Serialize)]
-#[cfg_attr(feature = "web-ui", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct StatsSnapshot {
     pub timestamp: u64,
     pub total_queries: u64,
