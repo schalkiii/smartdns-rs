@@ -17,6 +17,8 @@
 # web ui
 node_modules
 dist
+webui/.next
+webui/out
 
 .idea/
 
