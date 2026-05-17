@@ -8,16 +8,9 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{
-    sync::{RwLock, Semaphore},
+    sync::{Mutex, RwLock, Semaphore},
     task::JoinSet,
 };
-
-#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
-pub struct StatsSnapshot {
-    pub timestamp: u64,
-    pub total_queries: u64,
-    pub cache_hits: u64,
-}
 
 use crate::{
     config::ServerOpts,
@@ -33,6 +26,14 @@ use crate::{
 
 #[derive(Clone)]
 pub struct App(Arc<AppState>);
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[cfg_attr(feature = "web-ui", derive(utoipa::ToSchema))]
+pub struct StatsSnapshot {
+    pub timestamp: u64,
+    pub total_queries: u64,
+    pub cache_hits: u64,
+}
 
 impl App {
     fn new(cfg: Arc<RuntimeConfig>) -> (IncomingDnsRequest, Self) {
@@ -52,9 +53,9 @@ impl App {
                     uptime: Instant::now(),
                     loaded_at: RwLock::const_new(Instant::now()),
                     active_queries: Default::default(),
-                    total_queries: Default::default(),
-                    total_query_time_ns: Default::default(),
-                    stats_history: Default::default(),
+                    total_queries: AtomicU64::new(0),
+                    total_query_time_ns: AtomicU64::new(0),
+                    stats_history: Mutex::const_new(Vec::new()),
                     guard: AppGuard,
                 }
                 .into(),
@@ -100,38 +101,34 @@ impl App {
         self.total_queries.load(Ordering::Relaxed)
     }
 
-    pub fn total_query_time_ns(&self) -> u64 {
-        self.total_query_time_ns.load(Ordering::Relaxed)
-    }
-
     pub fn avg_query_time_ms(&self) -> f64 {
-        let total = self.total_queries();
+        let total = self.total_queries.load(Ordering::Relaxed);
         if total == 0 {
             return 0.0;
         }
-        let total_ns = self.total_query_time_ns();
-        total_ns as f64 / total as f64 / 1_000_000.0
+        let time_ns = self.total_query_time_ns.load(Ordering::Relaxed);
+        time_ns as f64 / total as f64 / 1_000_000.0
     }
 
     pub async fn add_stats_snapshot(&self, cache_hits: u64) {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
+        let mut history = self.stats_history.lock().await;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        let mut history = self.stats_history.write().await;
+        let total = self.total_queries();
         history.push(StatsSnapshot {
-            timestamp,
-            total_queries: self.total_queries(),
+            timestamp: now,
+            total_queries: total,
             cache_hits,
         });
-        if history.len() > 60 {
+        if history.len() > 120 {
             history.remove(0);
         }
     }
 
     pub async fn stats_history(&self) -> Vec<StatsSnapshot> {
-        self.stats_history.read().await.clone()
+        self.stats_history.lock().await.clone()
     }
 
     async fn init(&self) {
@@ -249,7 +246,7 @@ pub struct AppState {
     active_queries: AtomicUsize,
     total_queries: AtomicU64,
     total_query_time_ns: AtomicU64,
-    stats_history: RwLock<Vec<StatsSnapshot>>,
+    stats_history: Mutex<Vec<StatsSnapshot>>,
     guard: AppGuard,
 }
 
@@ -311,6 +308,7 @@ pub fn serve(cfg: Arc<RuntimeConfig>) {
                 }
 
                 app.active_queries.fetch_add(count, Ordering::Relaxed);
+                app.total_queries.fetch_add(count as u64, Ordering::Relaxed);
 
                 let handler = app.mw_handler.read().await.clone();
 
@@ -320,26 +318,14 @@ pub fn serve(cfg: Arc<RuntimeConfig>) {
                     let handler = handler.clone();
                     if server_opts.is_background {
                         if Instant::now() - last_activity < MAX_IDLE {
-                            let app = app.clone();
                             bg_batch.push(async move {
-                                let start = Instant::now();
                                 let _ = sender.send(process(handler, message, server_opts).await);
-                                let elapsed = start.elapsed();
-                                app.total_queries.fetch_add(1, Ordering::Relaxed);
-                                app.total_query_time_ns
-                                    .fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
                             });
                         }
                     } else {
                         last_activity = Instant::now();
-                        let app = app.clone();
                         batch.push(async move {
-                            let start = Instant::now();
                             let _ = sender.send(process(handler, message, server_opts).await);
-                            let elapsed = start.elapsed();
-                            app.total_queries.fetch_add(1, Ordering::Relaxed);
-                            app.total_query_time_ns
-                                .fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
                         });
                     }
                 }

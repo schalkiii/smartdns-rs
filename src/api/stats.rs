@@ -3,8 +3,6 @@ use std::sync::Arc;
 use axum::{Json, extract::State};
 use serde::Serialize;
 
-use crate::app::StatsSnapshot;
-
 use super::openapi::{IntoRouter, ToSchema, http::get, routes};
 use super::{ServeState, StatefulRouter};
 
@@ -23,7 +21,7 @@ struct DnsStats {
     cache_hit_rate: f64,
     avg_query_time_ms: f64,
     version: &'static str,
-    history: Vec<StatsSnapshot>,
+    history: Vec<crate::app::StatsSnapshot>,
 }
 
 #[get("/stats", tag = "Stats")]

@@ -15,10 +15,10 @@
 
 
 # web ui
-webui/node_modules
+node_modules
+dist
 webui/.next
 webui/out
-dist
 
 .idea/
 
