@@ -16,6 +16,9 @@ struct DnsStats {
     active_queries: usize,
     cache_size: usize,
     cache_hits: usize,
+    total_queries: u64,
+    cache_hit_rate: f64,
+    avg_query_time_ms: f64,
     version: &'static str,
 }
 
@@ -31,11 +34,18 @@ async fn stats(State(state): State<Arc<ServeState>>) -> Json<DnsStats> {
         (0, 0)
     };
 
+    let total_queries = app.total_queries();
+    let cache_hit_rate = app.cache_hit_rate(cache_hits as u64);
+    let avg_query_time_ms = app.avg_query_time_ms();
+
     Json(DnsStats {
         uptime_secs: app.uptime().as_secs(),
         active_queries: app.active_queries(),
         cache_size,
         cache_hits,
+        total_queries,
+        cache_hit_rate,
+        avg_query_time_ms,
         version: crate::BUILD_VERSION,
     })
 }

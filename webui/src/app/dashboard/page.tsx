@@ -19,70 +19,25 @@ import Chip from '@mui/material/Chip';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import QueryStatsIcon from '@mui/icons-material/QueryStats';
 import StorageIcon from '@mui/icons-material/Storage';
-import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import BarChartIcon from '@mui/icons-material/BarChart';
+import SpeedIcon from '@mui/icons-material/Speed';
+import CachedIcon from '@mui/icons-material/Cached';
 import { useStats, useCaches } from '@/lib/api';
 import { formatUptime, formatTimestamp } from '@/lib/utils';
 import { ApexOptions } from 'apexcharts';
 
 const Chart = dynamic(() => import('react-apexcharts'), { ssr: false });
 
-const mockChartSeries = [
-  {
-    name: '缓存命中',
-    data: [120, 145, 132, 168, 155, 189, 210, 198, 176, 203, 225, 198],
-  },
-  {
-    name: '缓存未命中',
-    data: [45, 52, 48, 55, 50, 58, 62, 55, 49, 60, 68, 55],
-  },
-];
-
-const mockChartCategories = [
-  '00:00', '02:00', '04:00', '06:00', '08:00',
-  '10:00', '12:00', '14:00', '16:00', '18:00',
-  '20:00', '22:00',
-];
-
-const chartOptions: ApexOptions = {
-  chart: {
-    type: 'line',
-    background: 'transparent',
-    toolbar: { show: false },
-    fontFamily: '"Inter", "Roboto", "Helvetica", "Arial", sans-serif',
-  },
-  theme: { mode: 'dark' },
-  stroke: {
-    curve: 'smooth',
-    width: 2,
-  },
-  colors: ['#1976d2', '#ef5350'],
-  xaxis: {
-    categories: mockChartCategories,
-    labels: { style: { colors: '#9ca3af' } },
-  },
-  yaxis: {
-    labels: { style: { colors: '#9ca3af' } },
-  },
-  grid: {
-    borderColor: '#1f2937',
-    strokeDashArray: 4,
-  },
-  legend: {
-    labels: { colors: '#9ca3af' },
-  },
-  tooltip: {
-    theme: 'dark',
-  },
-};
-
 function MetricCard({
   title,
   value,
+  subtitle,
   icon,
   color,
 }: {
   title: string;
   value: string;
+  subtitle?: string;
   icon: React.ReactNode;
   color: string;
 }) {
@@ -111,6 +66,11 @@ function MetricCard({
         <Typography variant="h4" sx={{ fontWeight: 700 }}>
           {value}
         </Typography>
+        {subtitle && (
+          <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+            {subtitle}
+          </Typography>
+        )}
       </CardContent>
     </Card>
   );
@@ -132,6 +92,61 @@ export default function DashboardOverview() {
   const { data: stats, isLoading: statsLoading, error: statsError } = useStats();
   const { data: caches, isLoading: cachesLoading, error: cachesError } = useCaches();
 
+  const hitRateValue = stats != null ? `${stats.cache_hit_rate.toFixed(1)}%` : '—';
+  const avgTimeValue = stats != null ? `${stats.avg_query_time_ms.toFixed(1)} ms` : '—';
+
+  const chartSeries = [
+    {
+      name: '缓存命中',
+      data: stats != null ? [stats.cache_hits] : [0],
+    },
+    {
+      name: '总查询数',
+      data: stats != null ? [stats.total_queries] : [0],
+    },
+  ];
+
+  const chartOptions: ApexOptions = {
+    chart: {
+      type: 'bar',
+      background: 'transparent',
+      toolbar: { show: false },
+      fontFamily: '"Inter", "Roboto", "Helvetica", "Arial", sans-serif',
+    },
+    theme: { mode: 'dark' },
+    plotOptions: {
+      bar: {
+        horizontal: false,
+        columnWidth: '50%',
+        borderRadius: 4,
+      },
+    },
+    colors: ['#42a5f5', '#66bb6a'],
+    xaxis: {
+      categories: ['当前统计'],
+      labels: { style: { colors: '#9ca3af' } },
+    },
+    yaxis: {
+      labels: { style: { colors: '#9ca3af' } },
+    },
+    grid: {
+      borderColor: '#1f2937',
+      strokeDashArray: 4,
+    },
+    legend: {
+      labels: { colors: '#9ca3af' },
+    },
+    tooltip: {
+      theme: 'dark',
+    },
+    dataLabels: {
+      enabled: true,
+      style: {
+        colors: ['#fff'],
+      },
+    },
+  };
+
   return (
     <Box>
       <Typography variant="h4" sx={{ mb: 3, fontWeight: 700 }}>
@@ -139,7 +154,7 @@ export default function DashboardOverview() {
       </Typography>
 
       <Grid container spacing={3} sx={{ mb: 4 }}>
-        <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
+        <Grid size={{ xs: 12, sm: 6, lg: 4 }}>
           {statsLoading ? (
             <MetricCardSkeleton />
           ) : statsError ? (
@@ -153,7 +168,64 @@ export default function DashboardOverview() {
             />
           )}
         </Grid>
-        <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
+        <Grid size={{ xs: 12, sm: 6, lg: 4 }}>
+          {statsLoading ? (
+            <MetricCardSkeleton />
+          ) : statsError ? (
+            <Alert severity="error">加载失败</Alert>
+          ) : (
+            <MetricCard
+              title="缓存命中率"
+              value={hitRateValue}
+              subtitle={`${stats!.cache_hits.toLocaleString()} 命中 / ${stats!.total_queries.toLocaleString()} 总查询`}
+              icon={<CachedIcon />}
+              color="#66bb6a"
+            />
+          )}
+        </Grid>
+        <Grid size={{ xs: 12, sm: 6, lg: 4 }}>
+          {statsLoading ? (
+            <MetricCardSkeleton />
+          ) : statsError ? (
+            <Alert severity="error">加载失败</Alert>
+          ) : (
+            <MetricCard
+              title="平均查询时间"
+              value={avgTimeValue}
+              icon={<SpeedIcon />}
+              color="#ffa726"
+            />
+          )}
+        </Grid>
+        <Grid size={{ xs: 12, sm: 6, lg: 4 }}>
+          {statsLoading ? (
+            <MetricCardSkeleton />
+          ) : statsError ? (
+            <Alert severity="error">加载失败</Alert>
+          ) : (
+            <MetricCard
+              title="总查询数"
+              value={stats!.total_queries.toLocaleString()}
+              icon={<BarChartIcon />}
+              color="#ab47bc"
+            />
+          )}
+        </Grid>
+        <Grid size={{ xs: 12, sm: 6, lg: 4 }}>
+          {statsLoading ? (
+            <MetricCardSkeleton />
+          ) : statsError ? (
+            <Alert severity="error">加载失败</Alert>
+          ) : (
+            <MetricCard
+              title="缓存条目数"
+              value={stats!.cache_size.toLocaleString()}
+              icon={<StorageIcon />}
+              color="#ef5350"
+            />
+          )}
+        </Grid>
+        <Grid size={{ xs: 12, sm: 6, lg: 4 }}>
           {statsLoading ? (
             <MetricCardSkeleton />
           ) : statsError ? (
@@ -163,35 +235,7 @@ export default function DashboardOverview() {
               title="活跃查询数"
               value={String(stats!.active_queries)}
               icon={<QueryStatsIcon />}
-              color="#66bb6a"
-            />
-          )}
-        </Grid>
-        <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
-          {statsLoading ? (
-            <MetricCardSkeleton />
-          ) : statsError ? (
-            <Alert severity="error">加载失败</Alert>
-          ) : (
-            <MetricCard
-              title="缓存条目数"
-              value={String(stats!.cache_size)}
-              icon={<StorageIcon />}
-              color="#ffa726"
-            />
-          )}
-        </Grid>
-        <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
-          {statsLoading ? (
-            <MetricCardSkeleton />
-          ) : statsError ? (
-            <Alert severity="error">加载失败</Alert>
-          ) : (
-            <MetricCard
-              title="缓存命中数"
-              value={String(stats!.cache_hits)}
-              icon={<CheckCircleIcon />}
-              color="#ef5350"
+              color="#26a69a"
             />
           )}
         </Grid>
@@ -200,13 +244,13 @@ export default function DashboardOverview() {
       <Card sx={{ mb: 4 }}>
         <CardContent>
           <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
-            缓存命中趋势
+            查询统计
           </Typography>
-          <Box sx={{ height: 350 }}>
+          <Box sx={{ height: 300 }}>
             <Chart
               options={chartOptions}
-              series={mockChartSeries}
-              type="line"
+              series={chartSeries}
+              type="bar"
               height="100%"
             />
           </Box>

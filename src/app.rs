@@ -3,7 +3,7 @@ use std::{
     ops::{Deref, DerefMut},
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -45,6 +45,8 @@ impl App {
                     uptime: Instant::now(),
                     loaded_at: RwLock::const_new(Instant::now()),
                     active_queries: Default::default(),
+                    total_queries: Default::default(),
+                    total_query_time_ns: Default::default(),
                     guard: AppGuard,
                 }
                 .into(),
@@ -84,6 +86,30 @@ impl App {
 
     pub fn active_queries(&self) -> usize {
         self.active_queries.load(Ordering::Relaxed)
+    }
+
+    pub fn total_queries(&self) -> u64 {
+        self.total_queries.load(Ordering::Relaxed)
+    }
+
+    pub fn total_query_time_ns(&self) -> u64 {
+        self.total_query_time_ns.load(Ordering::Relaxed)
+    }
+
+    pub fn avg_query_time_ms(&self) -> f64 {
+        let total = self.total_queries();
+        if total == 0 {
+            return 0.0;
+        }
+        self.total_query_time_ns() as f64 / total as f64 / 1_000_000.0
+    }
+
+    pub fn cache_hit_rate(&self, cache_hits: u64) -> f64 {
+        let total = self.total_queries();
+        if total == 0 {
+            return 0.0;
+        }
+        cache_hits as f64 / total as f64 * 100.0
     }
 
     async fn init(&self) {
@@ -199,6 +225,8 @@ pub struct AppState {
     uptime: Instant,
     loaded_at: RwLock<Instant>,
     active_queries: AtomicUsize,
+    total_queries: AtomicU64,
+    total_query_time_ns: AtomicU64,
     guard: AppGuard,
 }
 
@@ -269,14 +297,24 @@ pub fn serve(cfg: Arc<RuntimeConfig>) {
                     let handler = handler.clone();
                     if server_opts.is_background {
                         if Instant::now() - last_activity < MAX_IDLE {
+                            let app = app.clone();
                             bg_batch.push(async move {
+                                let start = Instant::now();
                                 let _ = sender.send(process(handler, message, server_opts).await);
+                                let elapsed = start.elapsed();
+                                app.total_queries.fetch_add(1, Ordering::Relaxed);
+                                app.total_query_time_ns.fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
                             });
                         }
                     } else {
                         last_activity = Instant::now();
+                        let app = app.clone();
                         batch.push(async move {
+                            let start = Instant::now();
                             let _ = sender.send(process(handler, message, server_opts).await);
+                            let elapsed = start.elapsed();
+                            app.total_queries.fetch_add(1, Ordering::Relaxed);
+                            app.total_query_time_ns.fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
                         });
                     }
                 }

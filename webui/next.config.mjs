@@ -12,7 +12,7 @@ const devConfig = {
 
 const prodConfig = {
   output: 'export',
-  basePath: '/dashboard',
+  assetPrefix: '/dashboard',
   images: {
     unoptimized: true,
   },
