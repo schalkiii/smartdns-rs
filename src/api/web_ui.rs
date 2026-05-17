@@ -17,7 +17,7 @@ pub fn routes() -> Router<Arc<ServeState>> {
     {
         use axum::{
             body::Body,
-            http::{header, StatusCode, Uri},
+            http::{StatusCode, Uri, header},
             response::{IntoResponse, Response},
         };
         use embedded::WebUiAssets;
@@ -37,26 +37,20 @@ pub fn routes() -> Router<Arc<ServeState>> {
                     let mime = mime_guess::from_path(path).first_or_octet_stream();
                     let body = Body::from(content.data);
                     let mut response = Response::new(body);
-                    response.headers_mut().insert(
-                        header::CONTENT_TYPE,
-                        mime.as_ref().parse().unwrap(),
-                    );
+                    response
+                        .headers_mut()
+                        .insert(header::CONTENT_TYPE, mime.as_ref().parse().unwrap());
                     response
                 }
-                None => {
-                    WebUiAssets::get("dashboard.html")
-                        .map(|content| {
-                            let mut response = Response::new(Body::from(content.data));
-                            response.headers_mut().insert(
-                                header::CONTENT_TYPE,
-                                "text/html".parse().unwrap(),
-                            );
-                            response
-                        })
-                        .unwrap_or_else(|| {
-                            (StatusCode::NOT_FOUND, "Not Found").into_response()
-                        })
-                }
+                None => WebUiAssets::get("dashboard.html")
+                    .map(|content| {
+                        let mut response = Response::new(Body::from(content.data));
+                        response
+                            .headers_mut()
+                            .insert(header::CONTENT_TYPE, "text/html".parse().unwrap());
+                        response
+                    })
+                    .unwrap_or_else(|| (StatusCode::NOT_FOUND, "Not Found").into_response()),
             }
         }
 
