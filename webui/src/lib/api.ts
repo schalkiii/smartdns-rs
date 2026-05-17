@@ -47,6 +47,7 @@ export interface StatsResponse {
   active_queries: number;
   cache_size: number;
   cache_hits: number;
+  cache_query_hits: number;
   total_queries: number;
   cache_hit_rate: number;
   avg_query_time_ms: number;

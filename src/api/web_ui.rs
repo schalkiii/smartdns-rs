@@ -17,7 +17,7 @@ pub fn routes() -> Router<Arc<ServeState>> {
     {
         use axum::{
             body::Body,
-            http::{header, StatusCode, Uri},
+            http::{StatusCode, Uri, header},
             response::{IntoResponse, Response},
         };
         use embedded::WebUiAssets;
@@ -27,7 +27,8 @@ pub fn routes() -> Router<Arc<ServeState>> {
                 let mime = mime_guess::from_path(path).first_or_octet_stream();
                 let body = Body::from(content.data);
                 let mut response = Response::new(body);
-                response.headers_mut()
+                response
+                    .headers_mut()
                     .insert(header::CONTENT_TYPE, mime.as_ref().parse().unwrap());
                 response
             })

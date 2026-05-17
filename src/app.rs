@@ -55,7 +55,6 @@ impl App {
                     total_queries: Default::default(),
                     total_query_time_ns: Default::default(),
                     stats_history: Default::default(),
-                    initial_cache_hits: AtomicU64::new(u64::MAX),
                     guard: AppGuard,
                 }
                 .into(),
@@ -110,27 +109,8 @@ impl App {
         if total == 0 {
             return 0.0;
         }
-        self.total_query_time_ns() as f64 / total as f64 / 1_000_000.0
-    }
-
-    pub fn cache_hit_rate(&self, cache_hits: u64) -> f64 {
-        let _ = self.initial_cache_hits.compare_exchange(
-            u64::MAX,
-            cache_hits,
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-        );
-        let initial = self.initial_cache_hits.load(Ordering::Relaxed);
-        let recent_hits = if initial == u64::MAX {
-            0
-        } else {
-            cache_hits.saturating_sub(initial)
-        };
-        let total = self.total_queries();
-        if total == 0 || recent_hits == 0 {
-            return 0.0;
-        }
-        (recent_hits as f64 / total as f64 * 100.0).min(100.0)
+        let total_ns = self.total_query_time_ns();
+        total_ns as f64 / total as f64 / 1_000_000.0
     }
 
     pub async fn add_stats_snapshot(&self, cache_hits: u64) {
@@ -270,7 +250,6 @@ pub struct AppState {
     total_queries: AtomicU64,
     total_query_time_ns: AtomicU64,
     stats_history: RwLock<Vec<StatsSnapshot>>,
-    initial_cache_hits: AtomicU64,
     guard: AppGuard,
 }
 
@@ -347,7 +326,8 @@ pub fn serve(cfg: Arc<RuntimeConfig>) {
                                 let _ = sender.send(process(handler, message, server_opts).await);
                                 let elapsed = start.elapsed();
                                 app.total_queries.fetch_add(1, Ordering::Relaxed);
-                                app.total_query_time_ns.fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
+                                app.total_query_time_ns
+                                    .fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
                             });
                         }
                     } else {
@@ -358,7 +338,8 @@ pub fn serve(cfg: Arc<RuntimeConfig>) {
                             let _ = sender.send(process(handler, message, server_opts).await);
                             let elapsed = start.elapsed();
                             app.total_queries.fetch_add(1, Ordering::Relaxed);
-                            app.total_query_time_ns.fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
+                            app.total_query_time_ns
+                                .fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
                         });
                     }
                 }

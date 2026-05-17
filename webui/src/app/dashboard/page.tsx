@@ -187,7 +187,7 @@ export default function DashboardOverview() {
             <MetricCard
               title="缓存命中率"
               value={hitRateValue}
-              subtitle={`${stats!.cache_hits.toLocaleString()} 命中 / ${stats!.total_queries.toLocaleString()} 总查询`}
+              subtitle={`${stats!.cache_query_hits.toLocaleString()} 命中 / ${stats!.total_queries.toLocaleString()} 总查询`}
               icon={<CachedIcon />}
               color="#66bb6a"
             />
@@ -260,7 +260,7 @@ export default function DashboardOverview() {
             <Chart
               options={chartOptions}
               series={chartSeries}
-              type="bar"
+              type="area"
               height="100%"
             />
           </Box>

@@ -66,7 +66,7 @@ jobs:
           rust_target: ${{ matrix.target }}
 
       - name: Build
-        run: cross build --release --no-default-features --features web-ui --target ${{ matrix.target }}
+        run: cross build --release --features web-ui --target ${{ matrix.target }}
 
       - name: Package
         run: |

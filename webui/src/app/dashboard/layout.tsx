@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import { usePathname } from 'next/navigation';
-import Link from 'next/link';
 import Box from '@mui/material/Box';
 import Drawer from '@mui/material/Drawer';
 import AppBar from '@mui/material/AppBar';
@@ -50,7 +49,7 @@ export default function DashboardLayout({
         {navItems.map((item) => (
           <ListItem key={item.href} disablePadding>
             <ListItemButton
-              component={Link}
+              component="a"
               href={item.href}
               selected={pathname === item.href}
               sx={{
