@@ -654,12 +654,12 @@ enum CacheStatus {
 
 #[derive(Deserialize, Serialize)]
 pub struct CachedQueryRecord {
-    name: Name,
-    hits: usize,
-    last_access: DateTime<Local>,
-    query_type: RecordType,
-    query_class: DNSClass,
-    records: Box<[Record]>,
+    pub name: Name,
+    pub hits: usize,
+    pub last_access: DateTime<Local>,
+    pub query_type: RecordType,
+    pub query_class: DNSClass,
+    pub records: Box<[Record]>,
 }
 
 #[derive(Clone)]
