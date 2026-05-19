@@ -21,7 +21,7 @@ async function apiPost<T>(path: string, body?: unknown): Promise<T> {
   if (!res.ok) {
     throw new Error(`API error: ${res.status} ${res.statusText}`);
   }
-  if (res.status === 204) {
+  if (res.status === 201 || res.status === 204) {
     return undefined as T;
   }
   return res.json();
@@ -80,6 +80,7 @@ export interface CacheEntry {
 
 export interface CachesResponse {
   count: number;
+  total: number;
   data: CacheEntry[];
 }
 
@@ -90,8 +91,8 @@ export interface CacheConfigResponse {
 }
 
 export interface Nameserver {
-  group: string;
-  url: string;
+  group: string[];
+  server: string;
   [key: string]: unknown;
 }
 
@@ -169,10 +170,10 @@ export function useSystemStatus() {
   });
 }
 
-export function useCaches() {
+export function useCaches(offset = 0, limit = 50) {
   return useQuery({
-    queryKey: cachesKeys,
-    queryFn: () => apiGet<CachesResponse>('/api/caches'),
+    queryKey: [...cachesKeys, offset, limit],
+    queryFn: () => apiGet<CachesResponse>(`/api/caches?offset=${offset}&limit=${limit}`),
     refetchInterval: 5000,
   });
 }

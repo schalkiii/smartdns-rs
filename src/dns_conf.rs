@@ -680,6 +680,18 @@ impl RuntimeConfigBuilder {
             }
         }
 
+        let managed_dir = self.conf_dir.as_deref().map(|dir| {
+            let dir = dir.join("managed");
+            if !dir.exists() {
+                let _ = std::fs::create_dir_all(&dir);
+            }
+            dir
+        });
+
+        if let Some(ref managed_dir) = managed_dir {
+            let _ = Self::load_managed_dir(&mut self, managed_dir);
+        }
+
         let conf_file = self.conf_file;
         let conf_dir = self.conf_dir;
         let mut cfg = self.config;
@@ -857,14 +869,6 @@ impl RuntimeConfigBuilder {
 
         std::mem::swap(&mut proxy_servers, &mut cfg.proxy_servers);
 
-        let managed_dir = conf_dir.as_deref().map(|dir| {
-            let dir = dir.join("managed");
-            if !dir.exists() {
-                let _ = std::fs::create_dir_all(&dir);
-            }
-            dir
-        });
-
         Ok(RuntimeConfig {
             conf_dir,
             conf_file,
@@ -933,6 +937,23 @@ impl RuntimeConfigBuilder {
             warn!("configuration file {:?} does not exist", path);
         }
 
+        Ok(())
+    }
+
+    fn load_managed_dir(&mut self, managed_dir: &Path) -> anyhow::Result<()> {
+        if !managed_dir.exists() {
+            return Ok(());
+        }
+        let entries = match std::fs::read_dir(managed_dir) {
+            Ok(entries) => entries,
+            Err(_) => return Ok(()),
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "conf") {
+                let _ = self.load_file(&path);
+            }
+        }
         Ok(())
     }
 

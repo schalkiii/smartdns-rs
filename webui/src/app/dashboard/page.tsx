@@ -40,6 +40,7 @@ import Tab from '@mui/material/Tab';
 import Tabs from '@mui/material/Tabs';
 import Snackbar from '@mui/material/Snackbar';
 import CircularProgress from '@mui/material/CircularProgress';
+import Pagination from '@mui/material/Pagination';
 import { useState } from 'react';
 import { useDashboardTab } from './layout';
 import {
@@ -58,6 +59,14 @@ import { formatUptime, formatTimestamp } from '@/lib/utils';
 import { ApexOptions } from 'apexcharts';
 
 const Chart = dynamic(() => import('react-apexcharts'), { ssr: false });
+
+function formatQueryType(qt: unknown): string {
+  if (typeof qt === 'string') return qt;
+  if (qt && typeof qt === 'object' && 'Unknown' in qt) {
+    return `UNKNOWN(${(qt as Record<string, unknown>).Unknown})`;
+  }
+  return 'UNKNOWN';
+}
 
 function MetricCard({
   title,
@@ -333,7 +342,7 @@ function OverviewTab() {
                 </TableHead>
                 <TableBody>
                   {caches.data.slice(0, 10).map((entry) => (
-                    <TableRow key={entry.name} hover>
+                    <TableRow key={`${entry.name}-${formatQueryType(entry.query_type)}`} hover>
                       <TableCell>
                         <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
                           {entry.name}
@@ -341,7 +350,7 @@ function OverviewTab() {
                       </TableCell>
                       <TableCell>
                         <Chip
-                          label={entry.query_type}
+                          label={formatQueryType(entry.query_type)}
                           size="small"
                           variant="outlined"
                         />
@@ -374,6 +383,9 @@ function UpstreamTab() {
   } = useListeners();
 
   function extractProtocol(url: string): string {
+    if (!url) {
+      return 'unknown';
+    }
     try {
       const u = new URL(url);
       return u.protocol.replace(':', '');
@@ -382,6 +394,8 @@ function UpstreamTab() {
       return match ? match[1] : 'unknown';
     }
   }
+
+
 
   return (
     <Box>
@@ -465,17 +479,17 @@ function UpstreamTab() {
                 <TableRow key={idx} hover>
                   <TableCell>
                     <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                      {ns.group || '-'}
+                      {ns.group?.length ? ns.group.join(', ') : '-'}
                     </Typography>
                   </TableCell>
                   <TableCell>
                     <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
-                      {ns.url}
+                      {ns.server}
                     </Typography>
                   </TableCell>
                   <TableCell>
                     <Chip
-                      label={extractProtocol(ns.url)}
+                      label={extractProtocol(ns.server)}
                       size="small"
                       color="primary"
                       variant="outlined"
@@ -547,6 +561,10 @@ function UpstreamTab() {
 
 function CacheTab() {
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const rowsPerPage = 50;
+  const offset = (page - 1) * rowsPerPage;
+
   const [snackbar, setSnackbar] = useState<{
     open: boolean;
     message: string;
@@ -557,7 +575,7 @@ function CacheTab() {
     data: caches,
     isLoading: cachesLoading,
     error: cachesError,
-  } = useCaches();
+  } = useCaches(offset, rowsPerPage);
 
   const {
     data: cacheConfig,
@@ -569,6 +587,7 @@ function CacheTab() {
   const handleFlush = () => {
     flushCache.mutate(undefined, {
       onSuccess: () => {
+        setPage(1);
         setSnackbar({
           open: true,
           message: '缓存已清空',
@@ -628,7 +647,7 @@ function CacheTab() {
                 <Skeleton variant="text" width={80} height={48} />
               ) : (
                 <Typography variant="h4" sx={{ fontWeight: 700 }}>
-                  {caches?.count ?? 0}
+                  {caches?.total ?? 0}
                 </Typography>
               )}
             </CardContent>
@@ -725,7 +744,7 @@ function CacheTab() {
                 </TableHead>
                 <TableBody>
                   {filteredCaches.map((entry) => (
-                    <TableRow key={entry.name} hover>
+                    <TableRow key={`${entry.name}-${formatQueryType(entry.query_type)}`} hover>
                       <TableCell>
                         <Typography
                           variant="body2"
@@ -736,7 +755,7 @@ function CacheTab() {
                       </TableCell>
                       <TableCell>
                         <Chip
-                          label={entry.query_type}
+                          label={formatQueryType(entry.query_type)}
                           size="small"
                           variant="outlined"
                         />
@@ -752,6 +771,16 @@ function CacheTab() {
                 </TableBody>
               </Table>
             </TableContainer>
+          )}
+          {caches && caches.total > rowsPerPage && (
+            <Box sx={{ display: 'flex', justifyContent: 'center', mt: 2 }}>
+              <Pagination
+                count={Math.ceil((caches.total || 0) / rowsPerPage)}
+                page={page}
+                onChange={(_, newPage) => setPage(newPage)}
+                color="primary"
+              />
+            </Box>
           )}
         </CardContent>
       </Card>

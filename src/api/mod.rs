@@ -149,13 +149,16 @@ struct DataPayload<T> {
 #[derive(Deserialize, Serialize)]
 struct DataListPayload<T> {
     count: usize,
+    total: usize,
     data: Vec<T>,
 }
 
 impl<T> DataListPayload<T> {
     fn new(data: Vec<T>) -> Self {
+        let total = data.len();
         Self {
-            count: data.len(),
+            count: total,
+            total,
             data,
         }
     }

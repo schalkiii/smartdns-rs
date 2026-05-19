@@ -307,7 +307,8 @@ pub fn serve(cfg: Arc<RuntimeConfig>) {
                 }
 
                 app.active_queries.fetch_add(count, Ordering::Relaxed);
-                app.total_queries.fetch_add(count as u64, Ordering::Relaxed);
+                let foreground = requests.iter().filter(|(_, opts, _)| !opts.is_background).count();
+                app.total_queries.fetch_add(foreground as u64, Ordering::Relaxed);
 
                 let handler = app.mw_handler.read().await.clone();
 
@@ -315,16 +316,25 @@ pub fn serve(cfg: Arc<RuntimeConfig>) {
 
                 while let Some((message, server_opts, sender)) = requests.pop() {
                     let handler = handler.clone();
+                    let app = app.clone();
                     if server_opts.is_background {
                         if Instant::now() - last_activity < MAX_IDLE {
                             bg_batch.push(async move {
-                                let _ = sender.send(process(handler, message, server_opts).await);
+                                let start = Instant::now();
+                                let result = process(handler, message, server_opts).await;
+                                app.total_query_time_ns
+                                    .fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                                let _ = sender.send(result);
                             });
                         }
                     } else {
                         last_activity = Instant::now();
                         batch.push(async move {
-                            let _ = sender.send(process(handler, message, server_opts).await);
+                            let start = Instant::now();
+                            let result = process(handler, message, server_opts).await;
+                            app.total_query_time_ns
+                                .fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                            let _ = sender.send(result);
                         });
                     }
                 }
