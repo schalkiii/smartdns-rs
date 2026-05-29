@@ -155,6 +155,48 @@ server-quic unfiltered.adguard-dns.com
 
 For more advanced configurations, please refer to [here](https://github.com/pymumu/smartdns/blob/doc/en/docs/configuration.md) , and refer to [TODO](https://github.com/mokeyish/smartdns-rs/blob/main/TODO.md) for the function coverage.
 
+## Performance Tuning
+
+### Foreground Concurrency Limit
+
+v0.13+ adds a foreground concurrency limiter (`FOREGROUND_CONCURRENCY = 64`) to prevent kernel socket buffer overflow (`ENOBUFS` / "resource too busy" errors) under high query load. Background queries (prefetch, serve-expired refresh) are limited to 16 concurrency.
+
+This is a built-in code-level limit — no configuration needed.
+
+### Recommended Production Configuration
+
+For pure forwarding/proxy scenarios (no IP speed selection needed), add these to your `smartdns.conf`:
+
+```conf
+# Disable speed check (default: Ping + HTTP:80 + HTTPS:443 per IP, 100-300ms overhead)
+speed-check-mode none
+
+# Aggressive caching to reduce upstream queries
+cache-size 65536
+serve-expired yes
+serve-expired-ttl 86400
+serve-expired-reply-ttl 30
+
+# TTL clamping to prevent CDN short-TTL records from flooding
+rr-ttl-min 300
+rr-ttl-reply-max 1800
+
+# Limit returned IP count to reduce connection overhead
+max-reply-ip-num 4
+
+# Block known-failing domains from reaching upstream
+# address /discovery-v4-3.verysync.cn/#
+```
+
+| Setting | Default | Recommended | Effect |
+|---------|---------|-------------|--------|
+| `speed-check-mode` | Ping+HTTP+HTTPS | `none` | Eliminates 100-300ms latency per query |
+| `serve-expired-ttl` | 0 (disabled) | `86400` | Serve cached results even when upstream is down |
+| `rr-ttl-min` | none | `300` | Prevents CDN records from expiring too fast |
+| `cache-size` | 0 | `65536` | More cache entries, fewer upstream queries |
+
+> **Note**: `serve-expired-ttl` max is `86400` (24h, enforced by `MAX_TTL` in code). `speed-check-mode none` disables IP ranking — upstream results are returned in original order.
+
 ## Built-in diagnostics via `dig`
 
 SmartDNS-rs supports built-in `CHAOS TXT` queries for server/client diagnostics.
