@@ -286,8 +286,6 @@ pub fn serve(cfg: Arc<RuntimeConfig>) {
         runtime.spawn(async move {
             use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
 
-            // todo:// manage concurrent requests.
-
             let mut inner_join_set = JoinSet::new();
 
             let mut last_activity = Instant::now();
@@ -296,7 +294,11 @@ pub fn serve(cfg: Arc<RuntimeConfig>) {
 
             const BATCH_SIZE: usize = 256;
 
-            let background_concurrency = Arc::new(Semaphore::new(16));
+            const FOREGROUND_CONCURRENCY: usize = 64;
+            const BACKGROUND_CONCURRENCY: usize = 16;
+
+            let foreground_concurrency = Arc::new(Semaphore::new(FOREGROUND_CONCURRENCY));
+            let background_concurrency = Arc::new(Semaphore::new(BACKGROUND_CONCURRENCY));
             let mut bg_batch = FuturesUnordered::new();
             let mut requests = Vec::with_capacity(BATCH_SIZE);
 
@@ -323,7 +325,9 @@ pub fn serve(cfg: Arc<RuntimeConfig>) {
                         }
                     } else {
                         last_activity = Instant::now();
+                        let permit = foreground_concurrency.clone();
                         batch.push(async move {
+                            let _permit = permit.acquire_owned().await;
                             let _ = sender.send(process(handler, message, server_opts).await);
                         });
                     }
