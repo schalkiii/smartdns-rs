@@ -321,10 +321,7 @@ pub fn serve(cfg: Arc<RuntimeConfig>) {
                     if server_opts.is_background {
                         if Instant::now() - last_activity < MAX_IDLE {
                             bg_batch.push(async move {
-                                let start = Instant::now();
                                 let result = process(handler, message, server_opts).await;
-                                app.total_query_time_ns
-                                    .fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
                                 let _ = sender.send(result);
                             });
                         }
