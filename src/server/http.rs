@@ -29,7 +29,17 @@ pub fn serve(
         .with_state(state.clone())
         .into_make_service_with_connect_info::<SocketAddr>();
 
-    tokio::spawn(async move {
+    std::thread::Builder::new()
+        .name("smartdns-http".to_string())
+        .spawn(move || {
+            let http_runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .thread_name("smartdns-http-wkr")
+                .enable_all()
+                .build()
+                .expect("failed to create HTTP runtime");
+
+            http_runtime.block_on(async move {
         let mut inner_join_set = JoinSet::new();
         loop {
             let (tcp_stream, src_addr) = tokio::select! {
@@ -85,7 +95,9 @@ pub fn serve(
 
             reap_tasks(&mut inner_join_set);
         }
-    });
+            });
+        })
+        .expect("failed to spawn HTTP thread");
 
     Ok(token)
 }

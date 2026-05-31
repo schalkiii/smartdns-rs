@@ -453,6 +453,20 @@ async fn process(
                                             response_header
                                                 .set_response_code(ResponseCode::NXDomain);
                                         }
+
+                                        let err_str = e.to_string();
+                                        if err_str.contains("resource") && err_str.contains("busy") {
+                                            log::warn!(
+                                                "{}resource too busy, backing off 100ms",
+                                                if server_opts.is_background {
+                                                    "Background"
+                                                } else {
+                                                    ""
+                                                },
+                                            );
+                                            tokio::time::sleep(Duration::from_millis(100)).await;
+                                        }
+
                                         let original = request.query().original();
                                         match e.as_soa(original) {
                                             Some(soa) => soa,

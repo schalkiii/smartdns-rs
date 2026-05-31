@@ -157,11 +157,24 @@ For more advanced configurations, please refer to [here](https://github.com/pymu
 
 ## Performance Tuning
 
-### Foreground Concurrency Limit
+### Performance Tuning: Long-Run Stability
 
-v0.13+ adds a foreground concurrency limiter (`FOREGROUND_CONCURRENCY = 64`) to prevent kernel socket buffer overflow (`ENOBUFS` / "resource too busy" errors) under high query load. Background queries (prefetch, serve-expired refresh) are limited to 16 concurrency.
+Several stability improvements are added in this fork to prevent resource exhaustion after days of continuous operation:
 
-This is a built-in code-level limit — no configuration needed.
+1. **Foreground Concurrency Limit** (`FOREGROUND_CONCURRENCY = 64`)
+   - Limits concurrent foreground DNS queries to 64 to prevent kernel UDP socket buffer overflow (`ENOBUFS` / "resource too busy")
+   - Background queries (prefetch, serve-expired refresh) are limited to 16 concurrency
+   - Built-in code-level limit — no configuration needed
+
+2. **ENOBUFS Backoff**
+   - When "resource too busy" is detected, add 100ms sleep to break the hot failure loop
+   - Prevents the death spiral where rapid failures saturate all worker threads
+
+3. **HTTP Runtime Isolation** (for WebUI)
+   - HTTP/WebUI runs on a **dedicated tokio runtime with 2 worker threads**
+   - DNS query saturation cannot starve the HTTP accept loop — WebUI remains accessible even under high load
+
+All fixes are enabled by default — no configuration needed.
 
 ### Recommended Production Configuration
 
