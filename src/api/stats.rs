@@ -18,8 +18,10 @@ struct DnsStats {
     cache_hits: u64,
     cache_query_hits: u64,
     total_queries: u64,
+    bg_total_queries: u64,
     cache_hit_rate: f64,
     avg_query_time_ms: f64,
+    bg_avg_query_time_ms: f64,
     version: &'static str,
     history: Vec<crate::app::StatsSnapshot>,
 }
@@ -38,12 +40,14 @@ async fn stats(State(state): State<Arc<ServeState>>) -> Json<DnsStats> {
     };
 
     let total_queries = app.total_queries();
+    let bg_total_queries = app.bg_total_queries();
     let cache_hit_rate = if total_queries > 0 {
         (cache_query_hits as f64 / total_queries as f64 * 100.0).min(100.0)
     } else {
         0.0
     };
     let avg_query_time_ms = app.avg_query_time_ms();
+    let bg_avg_query_time_ms = app.bg_avg_query_time_ms();
 
     app.add_stats_snapshot(cache_query_hits).await;
     let history = app.stats_history().await;
@@ -55,8 +59,10 @@ async fn stats(State(state): State<Arc<ServeState>>) -> Json<DnsStats> {
         cache_hits,
         cache_query_hits,
         total_queries,
+        bg_total_queries,
         cache_hit_rate,
         avg_query_time_ms,
+        bg_avg_query_time_ms,
         version: crate::BUILD_VERSION,
         history,
     })

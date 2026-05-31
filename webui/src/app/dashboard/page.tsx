@@ -1,48 +1,49 @@
-'use client';
+"use client";
 
-import dynamic from 'next/dynamic';
-import Box from '@mui/material/Box';
-import Card from '@mui/material/Card';
-import CardContent from '@mui/material/CardContent';
-import Grid from '@mui/material/Grid';
-import Skeleton from '@mui/material/Skeleton';
-import Typography from '@mui/material/Typography';
-import Table from '@mui/material/Table';
-import TableBody from '@mui/material/TableBody';
-import TableCell from '@mui/material/TableCell';
-import TableContainer from '@mui/material/TableContainer';
-import TableHead from '@mui/material/TableHead';
-import TableRow from '@mui/material/TableRow';
-import Paper from '@mui/material/Paper';
-import Alert from '@mui/material/Alert';
-import Chip from '@mui/material/Chip';
-import AccessTimeIcon from '@mui/icons-material/AccessTime';
-import QueryStatsIcon from '@mui/icons-material/QueryStats';
-import StorageIcon from '@mui/icons-material/Storage';
-import CachedIcon from '@mui/icons-material/Cached';
-import SpeedIcon from '@mui/icons-material/Speed';
-import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import DnsIcon from '@mui/icons-material/Dns';
-import HearingIcon from '@mui/icons-material/Hearing';
-import DeleteSweepIcon from '@mui/icons-material/DeleteSweep';
-import SearchIcon from '@mui/icons-material/Search';
-import AddIcon from '@mui/icons-material/Add';
-import DeleteIcon from '@mui/icons-material/Delete';
-import Button from '@mui/material/Button';
-import TextField from '@mui/material/TextField';
-import InputAdornment from '@mui/material/InputAdornment';
-import Dialog from '@mui/material/Dialog';
-import DialogActions from '@mui/material/DialogActions';
-import DialogContent from '@mui/material/DialogContent';
-import DialogTitle from '@mui/material/DialogTitle';
-import IconButton from '@mui/material/IconButton';
-import Tab from '@mui/material/Tab';
-import Tabs from '@mui/material/Tabs';
-import Snackbar from '@mui/material/Snackbar';
-import CircularProgress from '@mui/material/CircularProgress';
-import Pagination from '@mui/material/Pagination';
-import { useState } from 'react';
-import { useDashboardTab } from './layout';
+import dynamic from "next/dynamic";
+import Box from "@mui/material/Box";
+import Card from "@mui/material/Card";
+import CardContent from "@mui/material/CardContent";
+import Grid from "@mui/material/Grid";
+import Skeleton from "@mui/material/Skeleton";
+import Typography from "@mui/material/Typography";
+import Table from "@mui/material/Table";
+import TableBody from "@mui/material/TableBody";
+import TableCell from "@mui/material/TableCell";
+import TableContainer from "@mui/material/TableContainer";
+import TableHead from "@mui/material/TableHead";
+import TableRow from "@mui/material/TableRow";
+import Paper from "@mui/material/Paper";
+import Alert from "@mui/material/Alert";
+import Chip from "@mui/material/Chip";
+import AccessTimeIcon from "@mui/icons-material/AccessTime";
+import QueryStatsIcon from "@mui/icons-material/QueryStats";
+import StorageIcon from "@mui/icons-material/Storage";
+import CachedIcon from "@mui/icons-material/Cached";
+import SpeedIcon from "@mui/icons-material/Speed";
+import TimerIcon from "@mui/icons-material/Timer";
+import CheckCircleIcon from "@mui/icons-material/CheckCircle";
+import DnsIcon from "@mui/icons-material/Dns";
+import HearingIcon from "@mui/icons-material/Hearing";
+import DeleteSweepIcon from "@mui/icons-material/DeleteSweep";
+import SearchIcon from "@mui/icons-material/Search";
+import AddIcon from "@mui/icons-material/Add";
+import DeleteIcon from "@mui/icons-material/Delete";
+import Button from "@mui/material/Button";
+import TextField from "@mui/material/TextField";
+import InputAdornment from "@mui/material/InputAdornment";
+import Dialog from "@mui/material/Dialog";
+import DialogActions from "@mui/material/DialogActions";
+import DialogContent from "@mui/material/DialogContent";
+import DialogTitle from "@mui/material/DialogTitle";
+import IconButton from "@mui/material/IconButton";
+import Tab from "@mui/material/Tab";
+import Tabs from "@mui/material/Tabs";
+import Snackbar from "@mui/material/Snackbar";
+import CircularProgress from "@mui/material/CircularProgress";
+import Pagination from "@mui/material/Pagination";
+import { useState } from "react";
+import { useDashboardTab } from "./layout";
 import {
   useStats,
   useCaches,
@@ -54,18 +55,18 @@ import {
   useCreateAddress,
   useDeleteAddress,
   useForwards,
-} from '@/lib/api';
-import { formatUptime, formatTimestamp } from '@/lib/utils';
-import { ApexOptions } from 'apexcharts';
+} from "@/lib/api";
+import { formatUptime, formatTimestamp } from "@/lib/utils";
+import { ApexOptions } from "apexcharts";
 
-const Chart = dynamic(() => import('react-apexcharts'), { ssr: false });
+const Chart = dynamic(() => import("react-apexcharts"), { ssr: false });
 
 function formatQueryType(qt: unknown): string {
-  if (typeof qt === 'string') return qt;
-  if (qt && typeof qt === 'object' && 'Unknown' in qt) {
+  if (typeof qt === "string") return qt;
+  if (qt && typeof qt === "object" && "Unknown" in qt) {
     return `UNKNOWN(${(qt as Record<string, unknown>).Unknown})`;
   }
-  return 'UNKNOWN';
+  return "UNKNOWN";
 }
 
 function MetricCard({
@@ -82,14 +83,14 @@ function MetricCard({
   color: string;
 }) {
   return (
-    <Card sx={{ height: '100%' }}>
+    <Card sx={{ height: "100%" }}>
       <CardContent>
-        <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+        <Box sx={{ display: "flex", alignItems: "center", mb: 1 }}>
           <Box
             sx={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
               width: 40,
               height: 40,
               borderRadius: 1.5,
@@ -107,7 +108,11 @@ function MetricCard({
           {value}
         </Typography>
         {subtitle && (
-          <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ mt: 0.5, display: "block" }}
+          >
             {subtitle}
           </Typography>
         )}
@@ -118,7 +123,7 @@ function MetricCard({
 
 function MetricCardSkeleton() {
   return (
-    <Card sx={{ height: '100%' }}>
+    <Card sx={{ height: "100%" }}>
       <CardContent>
         <Skeleton variant="rounded" width={40} height={40} sx={{ mb: 1 }} />
         <Skeleton variant="text" width="60%" height={28} />
@@ -129,67 +134,95 @@ function MetricCardSkeleton() {
 }
 
 function OverviewTab() {
-  const { data: stats, isLoading: statsLoading, error: statsError } = useStats();
-  const { data: caches, isLoading: cachesLoading, error: cachesError } = useCaches();
+  const {
+    data: stats,
+    isLoading: statsLoading,
+    error: statsError,
+  } = useStats();
+  const {
+    data: caches,
+    isLoading: cachesLoading,
+    error: cachesError,
+  } = useCaches();
 
-  const hitRateValue = stats != null ? `${stats.cache_hit_rate.toFixed(1)}%` : '—';
-  const avgTimeValue = stats != null ? `${stats.avg_query_time_ms.toFixed(1)} ms` : '—';
+  const hitRateValue =
+    stats != null ? `${stats.cache_hit_rate.toFixed(1)}%` : "—";
+  const avgTimeValue =
+    stats != null ? `${stats.avg_query_time_ms.toFixed(1)} ms` : "—";
+  const bgAvgTimeValue =
+    stats != null ? `${stats.bg_avg_query_time_ms.toFixed(1)} ms` : "—";
 
   const chartSeries = [
     {
-      name: '总查询数',
-      data: (stats?.history?.length ? stats.history : [{ timestamp: 0, total_queries: stats?.total_queries ?? 0, cache_hits: stats?.cache_hits ?? 0 }])
-        .map((p) => ({ x: p.timestamp * 1000, y: p.total_queries })),
+      name: "总查询数",
+      data: (stats?.history?.length
+        ? stats.history
+        : [
+            {
+              timestamp: 0,
+              total_queries: stats?.total_queries ?? 0,
+              cache_hits: stats?.cache_hits ?? 0,
+            },
+          ]
+      ).map((p) => ({ x: p.timestamp * 1000, y: p.total_queries })),
     },
     {
-      name: '缓存命中',
-      data: (stats?.history?.length ? stats.history : [{ timestamp: 0, total_queries: stats?.total_queries ?? 0, cache_hits: stats?.cache_hits ?? 0 }])
-        .map((p) => ({ x: p.timestamp * 1000, y: p.cache_hits })),
+      name: "缓存命中",
+      data: (stats?.history?.length
+        ? stats.history
+        : [
+            {
+              timestamp: 0,
+              total_queries: stats?.total_queries ?? 0,
+              cache_hits: stats?.cache_hits ?? 0,
+            },
+          ]
+      ).map((p) => ({ x: p.timestamp * 1000, y: p.cache_hits })),
     },
   ];
 
   const chartOptions: ApexOptions = {
     chart: {
-      type: 'area',
-      background: 'transparent',
+      type: "area",
+      background: "transparent",
       toolbar: { show: false },
       fontFamily: '"Inter", "Roboto", "Helvetica", "Arial", sans-serif',
     },
-    theme: { mode: 'dark' },
+    theme: { mode: "dark" },
     stroke: {
-      curve: 'smooth',
+      curve: "smooth",
       width: 2,
     },
     fill: {
-      type: 'gradient',
+      type: "gradient",
       gradient: {
         shadeIntensity: 1,
         opacityFrom: 0.3,
         opacityTo: 0.05,
       },
     },
-    colors: ['#42a5f5', '#66bb6a'],
+    colors: ["#42a5f5", "#66bb6a"],
     xaxis: {
-      type: 'datetime',
+      type: "datetime",
       labels: {
-        style: { colors: '#9ca3af' },
+        style: { colors: "#9ca3af" },
         datetimeUTC: false,
       },
     },
     yaxis: {
-      labels: { style: { colors: '#9ca3af' } },
+      labels: { style: { colors: "#9ca3af" } },
     },
     grid: {
-      borderColor: '#1f2937',
+      borderColor: "#1f2937",
       strokeDashArray: 4,
     },
     legend: {
-      labels: { colors: '#9ca3af' },
+      labels: { colors: "#9ca3af" },
     },
     tooltip: {
-      theme: 'dark',
+      theme: "dark",
       x: {
-        format: 'HH:mm:ss',
+        format: "HH:mm:ss",
       },
     },
     dataLabels: {
@@ -254,10 +287,40 @@ function OverviewTab() {
             <Alert severity="error">加载失败</Alert>
           ) : (
             <MetricCard
+              title="后台查询耗时"
+              value={bgAvgTimeValue}
+              subtitle="缓存预取平均耗时"
+              icon={<TimerIcon />}
+              color="#66bb6a"
+            />
+          )}
+        </Grid>
+        <Grid size={{ xs: 12, sm: 6, lg: 4 }}>
+          {statsLoading ? (
+            <MetricCardSkeleton />
+          ) : statsError ? (
+            <Alert severity="error">加载失败</Alert>
+          ) : (
+            <MetricCard
               title="总查询数"
               value={stats!.total_queries.toLocaleString()}
               icon={<QueryStatsIcon />}
               color="#ab47bc"
+            />
+          )}
+        </Grid>
+        <Grid size={{ xs: 12, sm: 6, lg: 4 }}>
+          {statsLoading ? (
+            <MetricCardSkeleton />
+          ) : statsError ? (
+            <Alert severity="error">加载失败</Alert>
+          ) : (
+            <MetricCard
+              title="后台查询数"
+              value={stats!.bg_total_queries.toLocaleString()}
+              subtitle="缓存预取等后台任务"
+              icon={<CachedIcon />}
+              color="#7e57c2"
             />
           )}
         </Grid>
@@ -326,7 +389,10 @@ function OverviewTab() {
           ) : cachesError ? (
             <Alert severity="error">加载缓存数据失败</Alert>
           ) : !caches?.data?.length ? (
-            <Typography color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>
+            <Typography
+              color="text.secondary"
+              sx={{ py: 4, textAlign: "center" }}
+            >
               暂无缓存条目
             </Typography>
           ) : (
@@ -342,9 +408,15 @@ function OverviewTab() {
                 </TableHead>
                 <TableBody>
                   {caches.data.slice(0, 10).map((entry) => (
-                    <TableRow key={`${entry.name}-${formatQueryType(entry.query_type)}`} hover>
+                    <TableRow
+                      key={`${entry.name}-${formatQueryType(entry.query_type)}`}
+                      hover
+                    >
                       <TableCell>
-                        <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
+                        <Typography
+                          variant="body2"
+                          sx={{ fontFamily: "monospace" }}
+                        >
                           {entry.name}
                         </Typography>
                       </TableCell>
@@ -356,7 +428,9 @@ function OverviewTab() {
                         />
                       </TableCell>
                       <TableCell>{entry.hits.toLocaleString()}</TableCell>
-                      <TableCell>{formatTimestamp(entry.last_access)}</TableCell>
+                      <TableCell>
+                        {formatTimestamp(entry.last_access)}
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -384,18 +458,16 @@ function UpstreamTab() {
 
   function extractProtocol(url: string): string {
     if (!url) {
-      return 'unknown';
+      return "unknown";
     }
     try {
       const u = new URL(url);
-      return u.protocol.replace(':', '');
+      return u.protocol.replace(":", "");
     } catch {
       const match = url.match(/^(\w+):\/\//);
-      return match ? match[1] : 'unknown';
+      return match ? match[1] : "unknown";
     }
   }
-
-
 
   return (
     <Box>
@@ -405,10 +477,10 @@ function UpstreamTab() {
 
       <Grid container spacing={3} sx={{ mb: 4 }}>
         <Grid size={{ xs: 12, sm: 6 }}>
-          <Card sx={{ height: '100%' }}>
+          <Card sx={{ height: "100%" }}>
             <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-                <DnsIcon sx={{ mr: 1, color: 'primary.main' }} />
+              <Box sx={{ display: "flex", alignItems: "center", mb: 1 }}>
+                <DnsIcon sx={{ mr: 1, color: "primary.main" }} />
                 <Typography variant="body2" color="text.secondary">
                   上游服务器数量
                 </Typography>
@@ -424,10 +496,10 @@ function UpstreamTab() {
           </Card>
         </Grid>
         <Grid size={{ xs: 12, sm: 6 }}>
-          <Card sx={{ height: '100%' }}>
+          <Card sx={{ height: "100%" }}>
             <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-                <HearingIcon sx={{ mr: 1, color: 'success.main' }} />
+              <Box sx={{ display: "flex", alignItems: "center", mb: 1 }}>
+                <HearingIcon sx={{ mr: 1, color: "success.main" }} />
                 <Typography variant="body2" color="text.secondary">
                   监听端口数量
                 </Typography>
@@ -459,7 +531,7 @@ function UpstreamTab() {
       ) : !nameservers?.data?.length ? (
         <Card>
           <CardContent>
-            <Typography color="text.secondary" sx={{ textAlign: 'center' }}>
+            <Typography color="text.secondary" sx={{ textAlign: "center" }}>
               暂无上游服务器配置
             </Typography>
           </CardContent>
@@ -479,11 +551,14 @@ function UpstreamTab() {
                 <TableRow key={idx} hover>
                   <TableCell>
                     <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                      {ns.group?.length ? ns.group.join(', ') : '-'}
+                      {ns.group?.length ? ns.group.join(", ") : "-"}
                     </Typography>
                   </TableCell>
                   <TableCell>
-                    <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
+                    <Typography
+                      variant="body2"
+                      sx={{ fontFamily: "monospace" }}
+                    >
                       {ns.server}
                     </Typography>
                   </TableCell>
@@ -517,7 +592,7 @@ function UpstreamTab() {
       ) : !listeners?.data?.length ? (
         <Card>
           <CardContent>
-            <Typography color="text.secondary" sx={{ textAlign: 'center' }}>
+            <Typography color="text.secondary" sx={{ textAlign: "center" }}>
               暂无监听端口配置
             </Typography>
           </CardContent>
@@ -536,7 +611,10 @@ function UpstreamTab() {
               {listeners.data.map((ls, idx) => (
                 <TableRow key={idx} hover>
                   <TableCell>
-                    <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
+                    <Typography
+                      variant="body2"
+                      sx={{ fontFamily: "monospace" }}
+                    >
                       {ls.addr}
                     </Typography>
                   </TableCell>
@@ -560,7 +638,7 @@ function UpstreamTab() {
 }
 
 function CacheTab() {
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const rowsPerPage = 50;
   const offset = (page - 1) * rowsPerPage;
@@ -568,8 +646,8 @@ function CacheTab() {
   const [snackbar, setSnackbar] = useState<{
     open: boolean;
     message: string;
-    severity: 'success' | 'error';
-  }>({ open: false, message: '', severity: 'success' });
+    severity: "success" | "error";
+  }>({ open: false, message: "", severity: "success" });
 
   const {
     data: caches,
@@ -577,10 +655,7 @@ function CacheTab() {
     error: cachesError,
   } = useCaches(offset, rowsPerPage);
 
-  const {
-    data: cacheConfig,
-    isLoading: configLoading,
-  } = useCacheConfig();
+  const { data: cacheConfig, isLoading: configLoading } = useCacheConfig();
 
   const flushCache = useFlushCache();
 
@@ -590,23 +665,24 @@ function CacheTab() {
         setPage(1);
         setSnackbar({
           open: true,
-          message: '缓存已清空',
-          severity: 'success',
+          message: "缓存已清空",
+          severity: "success",
         });
       },
       onError: () => {
         setSnackbar({
           open: true,
-          message: '清空缓存失败',
-          severity: 'error',
+          message: "清空缓存失败",
+          severity: "error",
         });
       },
     });
   };
 
-  const filteredCaches = caches?.data?.filter((entry) =>
-    entry.name.toLowerCase().includes(search.toLowerCase())
-  ) ?? [];
+  const filteredCaches =
+    caches?.data?.filter((entry) =>
+      entry.name.toLowerCase().includes(search.toLowerCase()),
+    ) ?? [];
 
   return (
     <Box>
@@ -616,10 +692,10 @@ function CacheTab() {
 
       <Grid container spacing={3} sx={{ mb: 4 }}>
         <Grid size={{ xs: 12, sm: 6, lg: 4 }}>
-          <Card sx={{ height: '100%' }}>
+          <Card sx={{ height: "100%" }}>
             <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-                <StorageIcon sx={{ mr: 1, color: 'primary.main' }} />
+              <Box sx={{ display: "flex", alignItems: "center", mb: 1 }}>
+                <StorageIcon sx={{ mr: 1, color: "primary.main" }} />
                 <Typography variant="body2" color="text.secondary">
                   缓存大小限制
                 </Typography>
@@ -628,17 +704,17 @@ function CacheTab() {
                 <Skeleton variant="text" width={80} height={48} />
               ) : (
                 <Typography variant="h4" sx={{ fontWeight: 700 }}>
-                  {cacheConfig?.size ?? '-'}
+                  {cacheConfig?.size ?? "-"}
                 </Typography>
               )}
             </CardContent>
           </Card>
         </Grid>
         <Grid size={{ xs: 12, sm: 6, lg: 4 }}>
-          <Card sx={{ height: '100%' }}>
+          <Card sx={{ height: "100%" }}>
             <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-                <StorageIcon sx={{ mr: 1, color: 'warning.main' }} />
+              <Box sx={{ display: "flex", alignItems: "center", mb: 1 }}>
+                <StorageIcon sx={{ mr: 1, color: "warning.main" }} />
                 <Typography variant="body2" color="text.secondary">
                   当前缓存条目
                 </Typography>
@@ -654,8 +730,8 @@ function CacheTab() {
           </Card>
         </Grid>
         <Grid size={{ xs: 12, sm: 6, lg: 4 }}>
-          <Card sx={{ height: '100%', display: 'flex', alignItems: 'center' }}>
-            <CardContent sx={{ width: '100%' }}>
+          <Card sx={{ height: "100%", display: "flex", alignItems: "center" }}>
+            <CardContent sx={{ width: "100%" }}>
               <Button
                 variant="contained"
                 color="error"
@@ -682,11 +758,11 @@ function CacheTab() {
         <CardContent>
           <Box
             sx={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
               mb: 2,
-              flexWrap: 'wrap',
+              flexWrap: "wrap",
               gap: 2,
             }}
           >
@@ -727,9 +803,9 @@ function CacheTab() {
           ) : filteredCaches.length === 0 ? (
             <Typography
               color="text.secondary"
-              sx={{ py: 4, textAlign: 'center' }}
+              sx={{ py: 4, textAlign: "center" }}
             >
-              {search ? '未找到匹配的缓存条目' : '暂无缓存条目'}
+              {search ? "未找到匹配的缓存条目" : "暂无缓存条目"}
             </Typography>
           ) : (
             <TableContainer component={Paper} variant="outlined">
@@ -744,11 +820,14 @@ function CacheTab() {
                 </TableHead>
                 <TableBody>
                   {filteredCaches.map((entry) => (
-                    <TableRow key={`${entry.name}-${formatQueryType(entry.query_type)}`} hover>
+                    <TableRow
+                      key={`${entry.name}-${formatQueryType(entry.query_type)}`}
+                      hover
+                    >
                       <TableCell>
                         <Typography
                           variant="body2"
-                          sx={{ fontFamily: 'monospace' }}
+                          sx={{ fontFamily: "monospace" }}
                         >
                           {entry.name}
                         </Typography>
@@ -760,9 +839,7 @@ function CacheTab() {
                           variant="outlined"
                         />
                       </TableCell>
-                      <TableCell>
-                        {entry.hits.toLocaleString()}
-                      </TableCell>
+                      <TableCell>{entry.hits.toLocaleString()}</TableCell>
                       <TableCell>
                         {formatTimestamp(entry.last_access)}
                       </TableCell>
@@ -773,7 +850,7 @@ function CacheTab() {
             </TableContainer>
           )}
           {caches && caches.total > rowsPerPage && (
-            <Box sx={{ display: 'flex', justifyContent: 'center', mt: 2 }}>
+            <Box sx={{ display: "flex", justifyContent: "center", mt: 2 }}>
               <Pagination
                 count={Math.ceil((caches.total || 0) / rowsPerPage)}
                 page={page}
@@ -818,19 +895,15 @@ function RulesTabPanel({ children, value, index }: TabPanelProps) {
 
 function AddressRulesTab() {
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [domain, setDomain] = useState('');
-  const [address, setAddress] = useState('');
+  const [domain, setDomain] = useState("");
+  const [address, setAddress] = useState("");
   const [snackbar, setSnackbar] = useState<{
     open: boolean;
     message: string;
-    severity: 'success' | 'error';
-  }>({ open: false, message: '', severity: 'success' });
+    severity: "success" | "error";
+  }>({ open: false, message: "", severity: "success" });
 
-  const {
-    data: addresses,
-    isLoading,
-    error,
-  } = useAddresses();
+  const { data: addresses, isLoading, error } = useAddresses();
 
   const createAddress = useCreateAddress();
   const deleteAddress = useDeleteAddress();
@@ -843,21 +916,21 @@ function AddressRulesTab() {
         onSuccess: () => {
           setSnackbar({
             open: true,
-            message: '地址规则添加成功',
-            severity: 'success',
+            message: "地址规则添加成功",
+            severity: "success",
           });
           setDialogOpen(false);
-          setDomain('');
-          setAddress('');
+          setDomain("");
+          setAddress("");
         },
         onError: () => {
           setSnackbar({
             open: true,
-            message: '添加地址规则失败',
-            severity: 'error',
+            message: "添加地址规则失败",
+            severity: "error",
           });
         },
-      }
+      },
     );
   };
 
@@ -866,15 +939,15 @@ function AddressRulesTab() {
       onSuccess: () => {
         setSnackbar({
           open: true,
-          message: '地址规则已删除',
-          severity: 'success',
+          message: "地址规则已删除",
+          severity: "success",
         });
       },
       onError: () => {
         setSnackbar({
           open: true,
-          message: '删除地址规则失败',
-          severity: 'error',
+          message: "删除地址规则失败",
+          severity: "error",
         });
       },
     });
@@ -884,9 +957,9 @@ function AddressRulesTab() {
     <Box>
       <Box
         sx={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
           mb: 2,
         }}
       >
@@ -913,7 +986,7 @@ function AddressRulesTab() {
       ) : !addresses?.data?.length ? (
         <Card variant="outlined">
           <CardContent>
-            <Typography color="text.secondary" sx={{ textAlign: 'center' }}>
+            <Typography color="text.secondary" sx={{ textAlign: "center" }}>
               暂无地址规则
             </Typography>
           </CardContent>
@@ -932,7 +1005,10 @@ function AddressRulesTab() {
               {addresses.data.map((entry) => (
                 <TableRow key={entry.domain} hover>
                   <TableCell>
-                    <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
+                    <Typography
+                      variant="body2"
+                      sx={{ fontFamily: "monospace" }}
+                    >
                       {entry.domain}
                     </Typography>
                   </TableCell>
@@ -1029,9 +1105,9 @@ function ForwardRulesTab() {
     <Box>
       <Box
         sx={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
           mb: 2,
         }}
       >
@@ -1051,7 +1127,7 @@ function ForwardRulesTab() {
       ) : !forwards?.data?.length ? (
         <Card variant="outlined">
           <CardContent>
-            <Typography color="text.secondary" sx={{ textAlign: 'center' }}>
+            <Typography color="text.secondary" sx={{ textAlign: "center" }}>
               暂无转发规则
             </Typography>
           </CardContent>
@@ -1062,8 +1138,8 @@ function ForwardRulesTab() {
             <CardContent>
               <Box
                 sx={{
-                  display: 'flex',
-                  alignItems: 'center',
+                  display: "flex",
+                  alignItems: "center",
                   mb: 1.5,
                 }}
               >
@@ -1091,11 +1167,9 @@ function ForwardRulesTab() {
                           <TableCell>
                             <Typography
                               variant="body2"
-                              sx={{ fontFamily: 'monospace' }}
+                              sx={{ fontFamily: "monospace" }}
                             >
-                              {typeof fw === 'string'
-                                ? fw
-                                : JSON.stringify(fw)}
+                              {typeof fw === "string" ? fw : JSON.stringify(fw)}
                             </Typography>
                           </TableCell>
                         </TableRow>
@@ -1125,7 +1199,7 @@ function RulesTab() {
           <Tabs
             value={tab}
             onChange={(_, v) => setTab(v)}
-            sx={{ borderBottom: 1, borderColor: 'divider' }}
+            sx={{ borderBottom: 1, borderColor: "divider" }}
           >
             <Tab label="地址规则" />
             <Tab label="转发规则" />
@@ -1147,13 +1221,13 @@ export default function DashboardPage() {
   const { currentTab } = useDashboardTab();
 
   switch (currentTab) {
-    case 'upstream':
+    case "upstream":
       return <UpstreamTab />;
-    case 'cache':
+    case "cache":
       return <CacheTab />;
-    case 'rules':
+    case "rules":
       return <RulesTab />;
-    case 'overview':
+    case "overview":
     default:
       return <OverviewTab />;
   }

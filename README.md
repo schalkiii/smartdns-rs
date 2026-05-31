@@ -12,21 +12,39 @@ English | [中文](https://github.com/mokeyish/smartdns-rs/blob/main/README_zh-C
 
 SmartDNS-rs 🐋 is a local DNS server imspired by [C SmartDNS](https://github.com/pymumu/smartdns) to accepts DNS query requests from local clients, obtains DNS query results from multiple upstream DNS servers, and returns the fastest access results to clients. Avoiding DNS pollution and improving network access speed, supports high-performance ad filtering.
 
+---
 
+## Why SmartDNS-rs?
+
+This project is a **Rust reimplementation** of [SmartDNS](https://github.com/pymumu/smartdns) with several architectural and performance improvements:
+
+| Feature               | SmartDNS (C)                            | SmartDNS-rs (Rust)                       |
+| --------------------- | --------------------------------------- | ---------------------------------------- |
+| **Platform Support**  | Linux only (with Docker/WSL for others) | Native Windows, macOS, Linux, Android    |
+| **HTTP Service**      | Separate process required               | Built-in async HTTP server               |
+| **Concurrency Model** | Thread-based                            | Tokio async runtime                      |
+| **Memory Safety**     | Manual memory management                | Compile-time safety guarantees           |
+| **Configuration**     | File-based only                         | File + REST API hot-reload               |
+| **Web UI**            | Not included                            | Built-in dashboard                       |
+| **Background Tasks**  | Basic                                   | Queue-based with rate limiting           |
+| **Cache Prefetch**    | Fixed interval                          | Configurable batch + exponential backoff |
+| **Statistics**        | Limited                                 | Separate foreground/background metrics   |
+
+---
 
 ## Features
 
 - **Multiple upstream DNS servers**
 
-  Supports configuring multiple upstream DNS servers and query at the same  time.the query will not be affected, Even if there is a DNS server  exception.
+  Supports configuring multiple upstream DNS servers and query at the same time.the query will not be affected, Even if there is a DNS server exception.
 
 - **Return the fastest IP address**
 
-  Supports finding the fastest access IP address from the IP address list  of the domain name and returning it to the client to avoid DNS pollution and improve network access speed.
+  Supports finding the fastest access IP address from the IP address list of the domain name and returning it to the client to avoid DNS pollution and improve network access speed.
 
 - **Support for multiple query protocols**
 
-  Supports UDP, TCP, DoT, DoQ, DoH, DoH3 queries and  service, and non-53 port queries, effectively avoiding DNS pollution and protect privacy, and support query DNS over socks5, http proxy.
+  Supports UDP, TCP, DoT, DoQ, DoH, DoH3 queries and service, and non-53 port queries, effectively avoiding DNS pollution and protect privacy, and support query DNS over socks5, http proxy.
 
 - **Domain IP address specification**
 
@@ -50,7 +68,19 @@ SmartDNS-rs 🐋 is a local DNS server imspired by [C SmartDNS](https://github.c
 
 - **High performance, low resource consumption**
 
-  Tokio-based multi-threaded asynchronous I/O model; caches query  results; supports most-used domain name expired prefetching, query **'0'**  milliseconds, without eliminating the impact of DoH and DoT encryption.
+  Tokio-based multi-threaded asynchronous I/O model; caches query results; supports most-used domain name expired prefetching, query **'0'** milliseconds, without eliminating the impact of DoH and DoT encryption.
+
+- **Advanced Statistics & Monitoring**
+
+  Separately tracks foreground and background query metrics including query counts and average response times. Web UI displays real-time statistics for both user-facing queries and background cache prefetch operations.
+
+- **Cache Prefetch Optimization**
+
+  Intelligent cache prefetching with configurable batch limits (default 5 domains), minimum interval between prefetches (default 500ms), and exponential backoff for failed requests to prevent resource exhaustion.
+
+- **Background Task Queue**
+
+  Bounded channel-based rate limiting for background tasks ensures smooth traffic control and prevents worker thread saturation.
 
 - **Web UI Dashboard**
 
@@ -64,11 +94,9 @@ Note: The C version of smartdns is very functional, but because it only supports
 
 Please refer to [TODO](https://github.com/mokeyish/smartdns-rs/blob/main/TODO.md) for the function coverage
 
-
-
 ## Installing
 
-*Nightly builds can be found [here](https://github.com/mokeyish/smartdns-rs/actions/workflows/nightly.yml).*
+_Nightly builds can be found [here](https://github.com/mokeyish/smartdns-rs/actions/workflows/nightly.yml)._
 
 - MacOS
 
@@ -88,7 +116,6 @@ Please refer to [TODO](https://github.com/mokeyish/smartdns-rs/blob/main/TODO.md
 - Windows / Linux
 
   Go to [here](https://github.com/mokeyish/smartdns-rs/releases) to download the package and decompress it.
-
   1. Get help
 
      ```shell
@@ -111,9 +138,9 @@ Please refer to [TODO](https://github.com/mokeyish/smartdns-rs/blob/main/TODO.md
      ./smartdns service --help
      ```
 
-     *Note: Installed as a system service, administrator / root permissions are required.*
+     _Note: Installed as a system service, administrator / root permissions are required._
 
-     *Service management is compatible with all systems, call [sc](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-server-2012-r2-and-2012/cc754599(v=ws.11)) on Windows; call `launchctl` or `brew` on MacOS; call `Systemd` or `OpenRc` on Linux.*
+     _Service management is compatible with all systems, call [sc](<https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-server-2012-r2-and-2012/cc754599(v=ws.11)>) on Windows; call `launchctl` or `brew` on MacOS; call `Systemd` or `OpenRc` on Linux._
 
 ## Configuration
 
@@ -121,9 +148,9 @@ The following is the simplest example configuration
 
 ```conf
 # Listen on local port 53
-bind 127.0.0.1:53  
+bind 127.0.0.1:53
 
-# Configure bootstrap-dns, if not configured, call the system_conf, 
+# Configure bootstrap-dns, if not configured, call the system_conf,
 # it is recommended to configure, so that it will be encrypted.
 server https://1.1.1.1/dns-query  -bootstrap-dns -exclude-default-group
 server https://8.8.8.8/dns-query  -bootstrap-dns -exclude-default-group
@@ -214,12 +241,12 @@ SmartDNS-rs includes an embedded web dashboard accessible over HTTP. It provides
 
 ### Dashboard Sections
 
-| Tab | Description |
-|-----|-------------|
-| **系统概览 (Overview)** | Uptime, cache hit rate, average query time, total/active queries, cache entry count, query trend area chart, top cache entries. |
-| **上游服务器 (Upstream)** | List of configured upstream DNS servers with protocol labels, listener port configuration. |
-| **缓存管理 (Cache)** | Cache size limit, current entry count, searchable cache entry table with hit counts and last access timestamps, one-click cache flush. |
-| **规则管理 (Rules)** | Address rules (domain → IP mapping) and forward rules management. Supports creating new rules via dialog and deleting existing ones. |
+| Tab                       | Description                                                                                                                            |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **系统概览 (Overview)**   | Uptime, cache hit rate, average query time, total/active queries, cache entry count, query trend area chart, top cache entries.        |
+| **上游服务器 (Upstream)** | List of configured upstream DNS servers with protocol labels, listener port configuration.                                             |
+| **缓存管理 (Cache)**      | Cache size limit, current entry count, searchable cache entry table with hit counts and last access timestamps, one-click cache flush. |
+| **规则管理 (Rules)**      | Address rules (domain → IP mapping) and forward rules management. Supports creating new rules via dialog and deleting existing ones.   |
 
 ### Key Metrics
 
