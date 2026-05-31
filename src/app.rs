@@ -297,6 +297,7 @@ pub fn serve(cfg: Arc<RuntimeConfig>) {
             const BATCH_SIZE: usize = 256;
 
             let background_concurrency = Arc::new(Semaphore::new(16));
+            let foreground_concurrency = Arc::new(Semaphore::new(64));
             let mut bg_batch = FuturesUnordered::new();
             let mut requests = Vec::with_capacity(BATCH_SIZE);
 
@@ -353,11 +354,14 @@ pub fn serve(cfg: Arc<RuntimeConfig>) {
                 }
 
                 if !batch.is_empty() {
-                    inner_join_set.spawn(async move {
-                        let count = batch.len();
-                        while (batch.next().await).is_some() {}
-                        count
-                    });
+                    if let Ok(permit) = foreground_concurrency.clone().try_acquire_owned() {
+                        inner_join_set.spawn(async move {
+                            let count = batch.len();
+                            while (batch.next().await).is_some() {}
+                            drop(permit);
+                            count
+                        });
+                    }
                 }
 
                 let finished = reap_tasks(&mut inner_join_set);
