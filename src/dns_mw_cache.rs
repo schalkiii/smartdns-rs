@@ -117,13 +117,18 @@ impl DnsCacheMiddleware {
         let client = self.client.clone();
         let cache = self.cache.clone();
         tokio::spawn(async move {
-            let min_interval = Duration::from_secs(
+            let min_interval = Duration::from_millis(
                 std::env::var("PREFETCH_MIN_INTERVAL")
                     .as_deref()
-                    .unwrap_or("1")
+                    .unwrap_or("500")
                     .parse()
-                    .unwrap_or(1),
+                    .unwrap_or(500),
             );
+            let max_prefetch = std::env::var("PREFETCH_MAX_BATCH")
+                    .as_deref()
+                    .unwrap_or("5")
+                    .parse::<usize>()
+                    .unwrap_or(5);
             let mut last_check = Instant::now();
 
             loop {
@@ -135,7 +140,7 @@ impl DnsCacheMiddleware {
                     last_check = now;
 
                     let expired = {
-                        let (expired, most_recent0) = cache.get_expired(now, Some(5)).await;
+                        let (expired, most_recent0) = cache.get_expired(now, Some(max_prefetch as u64), min_interval).await;
 
                         debug!(
                             "Domain prefetch check(total: {}), elapsed {:?}",
@@ -609,6 +614,7 @@ impl DnsCache {
         &self,
         now: Instant,
         seconds_ahead: Option<u64>,
+        base_interval: Duration,
     ) -> (Vec<(Query, Option<String>)>, Duration) {
         let mut cache = self.cache.lock().await;
         let mut most_recent = Duration::from_secs(MAX_TTL as u64);
@@ -620,13 +626,12 @@ impl DnsCache {
                     .unwrap_or(now)
             } else {
                 now
-            } + Duration::from_secs(seconds_ahead.unwrap_or(5)); // 5 seconds ahead
+            } + Duration::from_secs(seconds_ahead.unwrap_or(5));
 
             for (query, entry) in cache.iter_mut() {
-                if entry.is_in_prefetching {
+                if !entry.should_retry_prefetch(now, base_interval) {
                     continue;
                 }
-                // only prefetch query type ip addr
                 if !query.query_type().is_ip_addr() {
                     continue;
                 }
@@ -679,6 +684,7 @@ struct DnsCacheEntry<T = DnsResponse> {
     data: T,
     valid_until: Instant,
     is_in_prefetching: bool,
+    prefetch_failure_time: Option<Instant>,
     stats: DnsCacheStats,
 }
 
@@ -688,6 +694,7 @@ impl<T> DnsCacheEntry<T> {
             data,
             valid_until,
             is_in_prefetching: false,
+            prefetch_failure_time: None,
             stats: DnsCacheStats::new(),
         }
     }
@@ -695,20 +702,32 @@ impl<T> DnsCacheEntry<T> {
     fn set_data(&mut self, data: T) {
         self.data = data;
         self.is_in_prefetching = false;
+        self.prefetch_failure_time = None;
     }
 
     fn set_valid_until(&mut self, valid_until: Instant) {
         self.valid_until = valid_until;
     }
 
-    /// Returns true if this set of ips is still valid
     fn is_current(&self, now: Instant) -> bool {
         now <= self.valid_until
     }
 
-    /// Returns the ttl as a Duration of time remaining.
     fn ttl(&self, now: Instant) -> Duration {
         self.valid_until.saturating_duration_since(now)
+    }
+
+    fn should_retry_prefetch(&self, now: Instant, base_interval: Duration) -> bool {
+        if !self.is_in_prefetching {
+            return true;
+        }
+        if let Some(failure_time) = self.prefetch_failure_time {
+            let exponential_delay = base_interval * 2.min(64);
+            if now >= failure_time + exponential_delay {
+                return true;
+            }
+        }
+        false
     }
 }
 

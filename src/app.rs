@@ -54,6 +54,8 @@ impl App {
                     active_queries: Default::default(),
                     total_queries: AtomicU64::new(0),
                     total_query_time_ns: AtomicU64::new(0),
+                    bg_total_queries: AtomicU64::new(0),
+                    bg_total_query_time_ns: AtomicU64::new(0),
                     stats_history: Mutex::const_new(Vec::new()),
                     guard: AppGuard,
                 }
@@ -106,6 +108,19 @@ impl App {
             return 0.0;
         }
         let time_ns = self.total_query_time_ns.load(Ordering::Relaxed);
+        time_ns as f64 / total as f64 / 1_000_000.0
+    }
+
+    pub fn bg_total_queries(&self) -> u64 {
+        self.bg_total_queries.load(Ordering::Relaxed)
+    }
+
+    pub fn bg_avg_query_time_ms(&self) -> f64 {
+        let total = self.bg_total_queries.load(Ordering::Relaxed);
+        if total == 0 {
+            return 0.0;
+        }
+        let time_ns = self.bg_total_query_time_ns.load(Ordering::Relaxed);
         time_ns as f64 / total as f64 / 1_000_000.0
     }
 
@@ -245,6 +260,8 @@ pub struct AppState {
     active_queries: AtomicUsize,
     total_queries: AtomicU64,
     total_query_time_ns: AtomicU64,
+    bg_total_queries: AtomicU64,
+    bg_total_query_time_ns: AtomicU64,
     stats_history: Mutex<Vec<StatsSnapshot>>,
     guard: AppGuard,
 }
@@ -293,6 +310,7 @@ pub fn serve(cfg: Arc<RuntimeConfig>) {
             let mut last_activity = Instant::now();
 
             const MAX_IDLE: Duration = Duration::from_secs(30 * 60); // 30 min
+            const MAX_BACKGROUND_QUEUE: usize = 64;
 
             const BATCH_SIZE: usize = 256;
 
@@ -309,7 +327,9 @@ pub fn serve(cfg: Arc<RuntimeConfig>) {
 
                 app.active_queries.fetch_add(count, Ordering::Relaxed);
                 let foreground = requests.iter().filter(|(_, opts, _)| !opts.is_background).count();
+                let background = count - foreground;
                 app.total_queries.fetch_add(foreground as u64, Ordering::Relaxed);
+                app.bg_total_queries.fetch_add(background as u64, Ordering::Relaxed);
 
                 let handler = app.mw_handler.read().await.clone();
 
@@ -320,10 +340,16 @@ pub fn serve(cfg: Arc<RuntimeConfig>) {
                     let app = app.clone();
                     if server_opts.is_background {
                         if Instant::now() - last_activity < MAX_IDLE {
-                            bg_batch.push(async move {
-                                let result = process(handler, message, server_opts).await;
-                                let _ = sender.send(result);
-                            });
+                            if bg_batch.len() < MAX_BACKGROUND_QUEUE {
+                                let app = app.clone();
+                                bg_batch.push(async move {
+                                    let start = Instant::now();
+                                    let result = process(handler, message, server_opts).await;
+                                    app.bg_total_query_time_ns
+                                        .fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                                    let _ = sender.send(result);
+                                });
+                            }
                         }
                     } else {
                         last_activity = Instant::now();
