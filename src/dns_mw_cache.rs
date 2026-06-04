@@ -22,19 +22,26 @@ use crate::{
         op::{Message, Query},
         rr::DNSClass,
     },
-    log::{debug, error, info},
+    log::{debug, error, info, warn},
     middleware::*,
 };
 use lru::LruCache;
 use tokio::sync::Notify;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio::time::sleep;
+
+#[derive(Clone)]
+pub struct PrefetchTask {
+    pub query: Query,
+    pub rule_group: Option<String>,
+}
 
 pub struct DnsCacheMiddleware {
     cfg: Arc<RuntimeConfig>,
     cache: Arc<DnsCache>,
     prefetch_notify: Arc<DomainPrefetchingNotify>,
     client: DnsHandle,
+    prefetch_sender: Option<mpsc::Sender<PrefetchTask>>,
 }
 
 impl DnsCacheMiddleware {
@@ -90,19 +97,33 @@ impl DnsCacheMiddleware {
             });
         }
 
+        let client = dns_handle.with_new_opt(ServerOpts {
+            is_background: true,
+            ..Default::default()
+        });
+
+        let prefetch_sender = if cfg.prefetch_domain() {
+            let (sender, receiver) = mpsc::channel(32);
+            let worker_client = client.clone();
+            tokio::spawn(async move {
+                prefetch_worker(receiver, worker_client).await;
+            });
+            Some(sender)
+        } else {
+            None
+        };
+
         let mw = Self {
             cfg: cfg.clone(),
             cache: Arc::new(cache),
             prefetch_notify: Arc::new(DomainPrefetchingNotify::new()),
-            client: dns_handle.with_new_opt(ServerOpts {
-                is_background: true,
-                ..Default::default()
-            }),
+            client,
+            prefetch_sender,
         };
 
         if cfg.prefetch_domain() {
             mw.start_prefetching();
-        };
+        }
 
         mw
     }
@@ -113,8 +134,7 @@ impl DnsCacheMiddleware {
 
     fn start_prefetching(&self) {
         let prefetch_notify = self.prefetch_notify.clone();
-
-        let client = self.client.clone();
+        let sender = self.prefetch_sender.clone();
         let cache = self.cache.clone();
         tokio::spawn(async move {
             let min_interval = Duration::from_millis(
@@ -154,23 +174,23 @@ impl DnsCacheMiddleware {
                     };
 
                     if !expired.is_empty() {
-                        for (query, group) in expired {
-                            let opts = ServerOpts {
-                                is_background: true,
-                                rule_group: group,
-                                ..Default::default()
-                            };
-                            let client = client.with_new_opt(opts);
-                            tokio::spawn(async move {
-                                let now = Instant::now();
-                                client.send(query.clone()).await;
-                                debug!(
-                                    "Prefetch domain {} {}, elapsed {:?}",
-                                    query.name(),
-                                    query.query_type(),
-                                    now.elapsed()
-                                );
-                            });
+                        if let Some(sender) = sender.as_ref() {
+                            for (query, group) in expired {
+                                let query_name = query.name().to_string();
+                                match sender.try_send(PrefetchTask {
+                                    query,
+                                    rule_group: group,
+                                }) {
+                                    Ok(_) => debug!("Prefetch task queued for {}", query_name),
+                                    Err(mpsc::error::TrySendError::Full(_)) => {
+                                        warn!("Prefetch queue is full, dropping task for {}", query_name);
+                                    }
+                                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                                        error!("Prefetch channel closed");
+                                        break;
+                                    }
+                                }
+                            }
                         }
                     }
                 } else {
@@ -183,6 +203,28 @@ impl DnsCacheMiddleware {
             }
         });
     }
+}
+
+pub async fn prefetch_worker(mut receiver: mpsc::Receiver<PrefetchTask>, client: DnsHandle) {
+    debug!("Prefetch worker started");
+    while let Some(task) = receiver.recv().await {
+        let now = Instant::now();
+        let opts = ServerOpts {
+            is_background: true,
+            rule_group: task.rule_group,
+            ..Default::default()
+        };
+        let client = client.with_new_opt(opts);
+        let query_msg: SerialMessage = task.query.clone().into();
+        let _ = client.send(query_msg).await;
+        debug!(
+            "Prefetch worker: domain {} {} completed, elapsed {:?}",
+            task.query.name(),
+            task.query.query_type(),
+            now.elapsed()
+        );
+    }
+    debug!("Prefetch worker stopped");
 }
 
 #[async_trait::async_trait]
@@ -216,15 +258,21 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
                 Some((res, status)) if res.name_server_group() == Some(ctx.server_group_name()) => {
                     match status {
                         CacheStatus::Valid => {
-                            // start backgroud query ?
-                            {
-                                let mut opts = ctx.server_opts.clone();
-                                opts.is_background = true;
-                                let client = self.client.with_new_opt(opts);
-                                let query = query.clone();
-                                tokio::spawn(async move {
-                                    client.send(query).await;
-                                });
+                            // background refresh via prefetch queue
+                            if let Some(sender) = self.prefetch_sender.as_ref() {
+                                let query_name = query.name().to_string();
+                                match sender.try_send(PrefetchTask {
+                                    query: query.clone(),
+                                    rule_group: Some(ctx.server_group_name().to_string()),
+                                }) {
+                                    Ok(_) => debug!("Background refresh queued for {}", query_name),
+                                    Err(mpsc::error::TrySendError::Full(_)) => {
+                                        warn!("Prefetch queue is full, dropping background refresh for {}", query_name);
+                                    }
+                                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                                        error!("Prefetch channel closed");
+                                    }
+                                }
                             }
 
                             debug!(
@@ -240,15 +288,21 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
                             return Ok(res);
                         }
                         CacheStatus::Expired if ctx.cfg().serve_expired() && !no_serve_expired => {
-                            // start backgroud query
-                            {
-                                let mut opts = ctx.server_opts.clone();
-                                opts.is_background = true;
-                                let client = self.client.with_new_opt(opts);
-                                let query = query.clone();
-                                tokio::spawn(async move {
-                                    client.send(query).await;
-                                });
+                            // background refresh via prefetch queue
+                            if let Some(sender) = self.prefetch_sender.as_ref() {
+                                let query_name = query.name().to_string();
+                                match sender.try_send(PrefetchTask {
+                                    query: query.clone(),
+                                    rule_group: Some(ctx.server_group_name().to_string()),
+                                }) {
+                                    Ok(_) => debug!("Background refresh queued for {}", query_name),
+                                    Err(mpsc::error::TrySendError::Full(_)) => {
+                                        warn!("Prefetch queue is full, dropping background refresh for {}", query_name);
+                                    }
+                                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                                        error!("Prefetch channel closed");
+                                    }
+                                }
                             }
 
                             debug!(
@@ -462,19 +516,14 @@ impl DnsCache {
             .with_name_server_group(name_server_group.to_string());
 
         {
-            let cache = self.cache.clone();
-            let lookup = lookup.clone();
-            tokio::spawn(async move {
-                let mut cache = cache.lock().await;
-
-                if let Some(entry) = cache.get_mut(&query) {
-                    entry.data = lookup;
-                    entry.valid_until = valid_until;
-                    entry.stats.hit();
-                } else {
-                    cache.put(query, DnsCacheEntry::new(lookup, valid_until));
-                }
-            });
+            let mut cache = self.cache.lock().await;
+            if let Some(entry) = cache.get_mut(&query) {
+                entry.data = lookup.clone();
+                entry.valid_until = valid_until;
+                entry.stats.hit();
+            } else {
+                cache.put(query, DnsCacheEntry::new(lookup.clone(), valid_until));
+            }
         }
 
         lookup
@@ -1105,5 +1154,142 @@ mod tests {
         tokio::task::yield_now().await;
 
         assert!(cache.get(&query, now).await.unwrap().0.records() == records);
+    }
+
+    #[tokio::test]
+    async fn test_prefetch_task_queue_full() {
+        let (tx, mut rx) = mpsc::channel::<PrefetchTask>(2);
+
+        let query = Query::query(
+            "test.example.com.".parse().unwrap(),
+            RecordType::A,
+        );
+        let task = PrefetchTask {
+            query,
+            rule_group: None,
+        };
+
+        assert!(tx.try_send(task.clone()).is_ok());
+        assert!(tx.try_send(task.clone()).is_ok());
+
+        let full_result = tx.try_send(task);
+        assert!(full_result.is_err());
+        assert!(matches!(full_result, Err(mpsc::error::TrySendError::Full(_))));
+
+        drop(tx);
+        let count = rx.recv().await;
+        assert!(count.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_prefetch_worker_processes_tasks() {
+        let (mut request_rx, handle) = DnsHandle::new();
+
+        let (tx, rx) = mpsc::channel(32);
+
+        let worker = tokio::spawn(prefetch_worker(rx, handle));
+
+        let query = Query::query(
+            "example.com.".parse().unwrap(),
+            RecordType::A,
+        );
+        let task = PrefetchTask {
+            query,
+            rule_group: Some("test_group".to_string()),
+        };
+
+        tx.send(task).await.unwrap();
+        drop(tx);
+
+        let worker_result = tokio::spawn(async move {
+            let mut count = 0;
+            while let Some((_msg, opts, reply_tx)) = request_rx.recv().await {
+                assert_eq!(opts.rule_group.as_deref(), Some("test_group"));
+                let response = Message::query().to_response();
+                let _ = reply_tx.send(SerialMessage::from(response));
+                count += 1;
+                if count >= 1 {
+                    break;
+                }
+            }
+            count
+        });
+
+        let (worker_ok, processed) = tokio::join!(worker, worker_result);
+        assert!(worker_ok.is_ok());
+        assert_eq!(processed.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_prefetch_worker_batch_processing() {
+        let (mut request_rx, handle) = DnsHandle::new();
+        let (tx, rx) = mpsc::channel(32);
+
+        let worker = tokio::spawn(prefetch_worker(rx, handle));
+
+        let domains = vec!["a.com", "b.com", "c.com"];
+        for domain in domains {
+            let query = Query::query(
+                format!("{}.", domain).parse().unwrap(),
+                RecordType::A,
+            );
+            let task = PrefetchTask {
+                query,
+                rule_group: None,
+            };
+            tx.send(task).await.unwrap();
+        }
+
+        drop(tx);
+
+        let worker_result = tokio::spawn(async move {
+            let mut count = 0;
+            while let Some((_msg, _opts, reply_tx)) = request_rx.recv().await {
+                let response = Message::query().to_response();
+                let _ = reply_tx.send(SerialMessage::from(response));
+                count += 1;
+                if count >= 3 {
+                    break;
+                }
+            }
+            count
+        });
+
+        let (worker_ok, processed) = tokio::join!(worker, worker_result);
+        assert!(worker_ok.is_ok());
+        assert_eq!(processed.unwrap(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_prefetch_worker_stops_on_channel_close() {
+        let (tx, rx) = mpsc::channel::<PrefetchTask>(32);
+
+        let handle = tokio::spawn(async move {
+            let mut receiver = rx;
+            let mut count = 0;
+            while let Some(_task) = receiver.recv().await {
+                count += 1;
+            }
+            count
+        });
+
+        drop(tx);
+
+        let count = handle.await.unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_prefetch_task_public_fields() {
+        let query = Query::query(
+            "test.com.".parse().unwrap(),
+            RecordType::AAAA,
+        );
+        let task = PrefetchTask {
+            query: query.clone(),
+            rule_group: Some("group1".to_string()),
+        };
+        assert_eq!(task.query.name().to_string(), "test.com.");
+        assert_eq!(task.rule_group.as_deref(), Some("group1"));
     }
 }

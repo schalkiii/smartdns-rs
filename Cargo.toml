@@ -284,6 +284,7 @@ bindgen = "0.72"
 # Dev-dependencies are not used when compiling a package for building, but are used for compiling tests, examples, and benchmarks.
 [dev-dependencies]
 indoc = "2"
+tokio = { version = "1.46", features = ["full"] }
 # reqwest = { version = "0.12", default-features = false, features = [
 #   "blocking",
 #   "rustls-tls",
