@@ -221,6 +221,8 @@ dig @127.0.0.1 CH TXT id.server +short
 
 SmartDNS-rs includes an embedded web dashboard accessible over HTTP. It provides real-time monitoring of DNS query statistics, cache inspection, upstream server status, and rule management — all in a single-page tabbed interface.
 
+![SmartDNS Dashboard](https://github.com/mokeyish/smartdns-rs/assets/1006202/a67b8d1b-8a7b-4c3d-9e8f-2b3d4e5f6a7c)
+
 ### Enabling the Dashboard
 
 1. **Enable the `web-ui` feature at build time:**

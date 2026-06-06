@@ -40,7 +40,7 @@ pub fn serve(socket: net::UdpSocket, handler: DnsHandle) -> CancellationToken {
             };
 
             let src_addr = message.addr();
-            log::debug!("received udp request from: {}", src_addr);
+            log::trace!("received udp request from: {}", src_addr);
 
             // verify that the src address is safe for responses
             if let Err(e) = sanitize_src_address(src_addr) {

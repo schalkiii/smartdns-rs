@@ -22,7 +22,7 @@ use crate::{
         op::{Message, Query},
         rr::DNSClass,
     },
-    log::{debug, error, info, warn},
+    log::{debug, error, info},
     middleware::*,
 };
 use lru::LruCache;
@@ -103,7 +103,8 @@ impl DnsCacheMiddleware {
         });
 
         let prefetch_sender = if cfg.prefetch_domain() {
-            let (sender, receiver) = mpsc::channel(32);
+            // 增加 channel 容量从 32 到 256，防止高负载时 prefetch 任务被丢弃
+            let (sender, receiver) = mpsc::channel(256);
             let worker_client = client.clone();
             tokio::spawn(async move {
                 prefetch_worker(receiver, worker_client).await;
@@ -149,6 +150,8 @@ impl DnsCacheMiddleware {
                     .unwrap_or("5")
                     .parse::<usize>()
                     .unwrap_or(5);
+            // 每次检查最多取 16 条过期记录，防止启动时洪水般涌入 channel
+            const PREFETCH_BATCH_SIZE: usize = 16;
             let mut last_check = Instant::now();
 
             loop {
@@ -160,10 +163,10 @@ impl DnsCacheMiddleware {
                     last_check = now;
 
                     let expired = {
-                        let (expired, most_recent0) = cache.get_expired(now, Some(max_prefetch as u64), min_interval).await;
+                        let (expired, most_recent0) = cache.get_expired(now, Some(max_prefetch as u64), min_interval, PREFETCH_BATCH_SIZE).await;
 
                         debug!(
-                            "Domain prefetch check(total: {}), elapsed {:?}",
+                            "[prefetch] check: cache={} entries, elapsed {:?}",
                             cache.cache().lock().await.len(),
                             now.elapsed()
                         );
@@ -177,16 +180,14 @@ impl DnsCacheMiddleware {
                         if let Some(sender) = sender.as_ref() {
                             for (query, group) in expired {
                                 let query_name = query.name().to_string();
-                                match sender.try_send(PrefetchTask {
+                                // 使用 send 而非 try_send，提供背压，防止 channel 溢出
+                                match sender.send(PrefetchTask {
                                     query,
                                     rule_group: group,
-                                }) {
-                                    Ok(_) => debug!("Prefetch task queued for {}", query_name),
-                                    Err(mpsc::error::TrySendError::Full(_)) => {
-                                        warn!("Prefetch queue is full, dropping task for {}", query_name);
-                                    }
-                                    Err(mpsc::error::TrySendError::Closed(_)) => {
-                                        error!("Prefetch channel closed");
+                                }).await {
+                                    Ok(_) => debug!("[prefetch] queued: {}", query_name),
+                                    Err(_) => {
+                                        error!("[prefetch] channel closed");
                                         break;
                                     }
                                 }
@@ -206,24 +207,54 @@ impl DnsCacheMiddleware {
 }
 
 pub async fn prefetch_worker(mut receiver: mpsc::Receiver<PrefetchTask>, client: DnsHandle) {
+    use tokio::sync::Semaphore;
+    use std::sync::Arc;
+
     debug!("Prefetch worker started");
-    while let Some(task) = receiver.recv().await {
-        let now = Instant::now();
-        let opts = ServerOpts {
-            is_background: true,
-            rule_group: task.rule_group,
-            ..Default::default()
-        };
-        let client = client.with_new_opt(opts);
-        let query_msg: SerialMessage = task.query.clone().into();
-        let _ = client.send(query_msg).await;
-        debug!(
-            "Prefetch worker: domain {} {} completed, elapsed {:?}",
-            task.query.name(),
-            task.query.query_type(),
-            now.elapsed()
-        );
+    // 限制并发 prefetch 查询数为 8，防止资源耗尽同时保证处理速度
+    let semaphore = Arc::new(Semaphore::new(8));
+
+    let mut join_set = tokio::task::JoinSet::new();
+
+    loop {
+        tokio::select! {
+            task = receiver.recv() => {
+                let Some(task) = task else {
+                    break;
+                };
+                let now = Instant::now();
+                let opts = ServerOpts {
+                    is_background: true,
+                    rule_group: task.rule_group,
+                    ..Default::default()
+                };
+                let client = client.with_new_opt(opts);
+                let query_msg: SerialMessage = task.query.clone().into();
+                let qname = task.query.name().to_string();
+                let qtype = task.query.query_type();
+                let permit = semaphore.clone();
+
+                // 快速取出 channel 中的任务，spawn 后通过 semaphore 控制并发
+                join_set.spawn(async move {
+                    let _permit = permit.acquire_owned().await;
+                    let _ = client.send(query_msg).await;
+                    debug!(
+                        "[prefetch] {} {} completed, elapsed {:?}",
+                        qname,
+                        qtype,
+                        now.elapsed()
+                    );
+                });
+            }
+            Some(_) = join_set.join_next(), if !join_set.is_empty() => {
+                // 清理已完成的任务
+            }
+        }
     }
+
+    // 等待所有正在进行的 prefetch 任务完成
+    while (join_set.join_next().await).is_some() {}
+
     debug!("Prefetch worker stopped");
 }
 
@@ -265,18 +296,18 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
                                     query: query.clone(),
                                     rule_group: Some(ctx.server_group_name().to_string()),
                                 }) {
-                                    Ok(_) => debug!("Background refresh queued for {}", query_name),
+                                    Ok(_) => debug!("[cache] bg-refresh queued: {}", query_name),
                                     Err(mpsc::error::TrySendError::Full(_)) => {
-                                        warn!("Prefetch queue is full, dropping background refresh for {}", query_name);
+                                        debug!("[cache] queue full, drop bg-refresh: {}", query_name);
                                     }
                                     Err(mpsc::error::TrySendError::Closed(_)) => {
-                                        error!("Prefetch channel closed");
+                                        error!("[cache] prefetch channel closed");
                                     }
                                 }
                             }
 
                             debug!(
-                                "name: {} {} using caching",
+                                "[cache] hit: {} {} (valid)",
                                 query.name(),
                                 query.query_type()
                             );
@@ -295,18 +326,18 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
                                     query: query.clone(),
                                     rule_group: Some(ctx.server_group_name().to_string()),
                                 }) {
-                                    Ok(_) => debug!("Background refresh queued for {}", query_name),
+                                    Ok(_) => debug!("[cache] bg-refresh queued: {}", query_name),
                                     Err(mpsc::error::TrySendError::Full(_)) => {
-                                        warn!("Prefetch queue is full, dropping background refresh for {}", query_name);
+                                        debug!("[cache] queue full, drop bg-refresh: {}", query_name);
                                     }
                                     Err(mpsc::error::TrySendError::Closed(_)) => {
-                                        error!("Prefetch channel closed");
+                                        error!("[cache] prefetch channel closed");
                                     }
                                 }
                             }
 
                             debug!(
-                                "name: {} {} using caching",
+                                "[cache] hit: {} {} (expired, serve-stale)",
                                 query.name(),
                                 query.query_type()
                             );
@@ -664,6 +695,7 @@ impl DnsCache {
         now: Instant,
         seconds_ahead: Option<u64>,
         base_interval: Duration,
+        max_count: usize,
     ) -> (Vec<(Query, Option<String>)>, Duration) {
         let mut cache = self.cache.lock().await;
         let mut most_recent = Duration::from_secs(MAX_TTL as u64);
@@ -678,6 +710,9 @@ impl DnsCache {
             } + Duration::from_secs(seconds_ahead.unwrap_or(5));
 
             for (query, entry) in cache.iter_mut() {
+                if expired.len() >= max_count {
+                    break;
+                }
                 if !entry.should_retry_prefetch(now, base_interval) {
                     continue;
                 }

@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    ops::{Deref, DerefMut},
+    ops::DerefMut,
     sync::{
         Arc,
         atomic::{AtomicU64, AtomicUsize, Ordering},
@@ -310,11 +310,11 @@ pub fn serve(cfg: Arc<RuntimeConfig>) {
             let mut last_activity = Instant::now();
 
             const MAX_IDLE: Duration = Duration::from_secs(30 * 60); // 30 min
-            const MAX_BACKGROUND_QUEUE: usize = 64;
+            const MAX_BACKGROUND_QUEUE: usize = 16;
 
             const BATCH_SIZE: usize = 256;
 
-            let background_concurrency = Arc::new(Semaphore::new(16));
+            let background_concurrency = Arc::new(Semaphore::new(4));
             let foreground_concurrency = Arc::new(Semaphore::new(64));
             let mut bg_batch = FuturesUnordered::new();
             let mut requests = Vec::with_capacity(BATCH_SIZE);
@@ -452,22 +452,32 @@ async fn process(
 
                             let response = {
                                 let start = Instant::now();
+                                let qid = request.id();
+                                let qname = request.query().original().to_string();
+                                let qtype = request.query().query_type();
+                                let bg = server_opts.is_background;
+
+                                // 请求前日志，包含查询 ID 用于串联整个请求链路
+                                log::debug!(
+                                    "[qid={}] {}query: {} {}",
+                                    qid,
+                                    if bg { "[bg] " } else { "" },
+                                    qname,
+                                    qtype,
+                                );
+
                                 let res = handler.search(&request, &server_opts).await;
 
-                                log::debug!(
-                                    "{}Request: {:?}",
-                                    if server_opts.is_background {
-                                        "Background"
-                                    } else {
-                                        ""
-                                    },
-                                    request
-                                );
                                 match res {
                                     Ok(lookup) => {
+                                        let record_count = lookup.record_iter().count();
                                         log::debug!(
-                                            "Response: {}, Duration: {:?}",
-                                            lookup.deref(),
+                                            "[qid={}] {}done: {} {} -> {} record(s), {:?}",
+                                            qid,
+                                            if bg { "[bg] " } else { "" },
+                                            qname,
+                                            qtype,
+                                            record_count,
                                             start.elapsed()
                                         );
                                         lookup
@@ -475,12 +485,11 @@ async fn process(
                                     Err(e) => {
                                         if e.is_nx_domain() {
                                             log::debug!(
-                                                "{}Response: error resolving: NXDomain, Duration: {:?}",
-                                                if server_opts.is_background {
-                                                    "Background"
-                                                } else {
-                                                    ""
-                                                },
+                                                "[qid={}] {}nxdomain: {} {}, {:?}",
+                                                qid,
+                                                if bg { "[bg] " } else { "" },
+                                                qname,
+                                                qtype,
                                                 start.elapsed()
                                             );
                                             response_header
@@ -490,13 +499,12 @@ async fn process(
                                         match e.as_soa(original) {
                                             Some(soa) => soa,
                                             None => {
-                                                log::debug!(
-                                                    "{}Response: error resolving: {}, Duration: {:?}",
-                                                    if server_opts.is_background {
-                                                        "Background"
-                                                    } else {
-                                                        ""
-                                                    },
+                                                log::warn!(
+                                                    "[qid={}] {}failed: {} {} -> {}, {:?}",
+                                                    qid,
+                                                    if bg { "[bg] " } else { "" },
+                                                    qname,
+                                                    qtype,
                                                     e,
                                                     start.elapsed()
                                                 );

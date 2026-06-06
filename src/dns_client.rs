@@ -13,7 +13,7 @@ use crate::{
     dns::DnsResponse,
     dns_conf::NameServerInfo,
     dns_error::LookupError,
-    log::{self, debug, info, warn},
+    log::{self, debug, info, warn, trace},
     proxy::ProxyConfig,
     rustls::TlsClientConfigBundle,
 };
@@ -532,7 +532,7 @@ mod name_server {
             if options.client_subnet.is_none() {
                 if let Some(subnet) = client_subnet.as_ref() {
                     log::debug!(
-                        "query name: {} type: {} subnet: {}/{}",
+                        "[ns] query: {} {} subnet: {}/{}",
                         query.name(),
                         query.query_type(),
                         subnet.addr(),
@@ -710,7 +710,7 @@ mod bootstrap {
                 Ok(lookup) => {
                     let records = lookup.records().to_vec();
 
-                    debug!(
+                    trace!(
                         "lookup nameserver {} {}, {:?}",
                         name,
                         record_type,

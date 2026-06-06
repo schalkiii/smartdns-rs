@@ -13,7 +13,7 @@ use crate::{
     dns::*,
     dns_client::{DnsClient, GenericResolver, NameServerGroup},
     dns_error::LookupError,
-    log::{debug, error},
+    log::{debug, error, trace},
     middleware::*,
 };
 
@@ -50,7 +50,7 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for NameServerMid
         if rtype.is_ip_addr() {
             if let Some(lookup) = client.lookup_nameserver(name.clone(), rtype).await {
                 debug!(
-                    "lookup nameserver {} {} ip {:?}",
+                    "[ns] lookup {} {} -> {:?}",
                     name,
                     rtype,
                     lookup
@@ -107,7 +107,7 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for NameServerMid
             }
         };
 
-        debug!(
+        trace!(
             "query name: {} type: {}{} via [Group: {}]",
             name,
             rtype,

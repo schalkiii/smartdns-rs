@@ -11,11 +11,13 @@ use hickory_resolver::config::NameServerConfig;
 use smallvec::{SmallVec, smallvec, smallvec_inline};
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::task::Poll;
 use std::task::ready;
 use std::time::Duration;
 use std::{io, net::SocketAddr, pin::Pin};
+
+use tokio::sync::Semaphore;
 
 use crate::libdns::{
     proto::{
@@ -483,6 +485,19 @@ async fn new_connection(
 }
 
 /// The Tokio Runtime for async execution
+/// 全局 UDP socket 创建信号量，限制并发 socket 创建数量，防止 OS 资源耗尽。
+/// Windows 上大量并发创建 socket 会导致 "resource too busy" 错误 (WSAENOBUFS)。
+static UDP_CREATE_SEMAPHORE: OnceLock<Arc<Semaphore>> = OnceLock::new();
+
+fn udp_create_semaphore() -> Arc<Semaphore> {
+            UDP_CREATE_SEMAPHORE
+                .get_or_init(|| {
+                    // 限制并发 UDP socket 创建数为 8，避免 OS 资源耗尽
+                    Arc::new(Semaphore::new(8))
+                })
+                .clone()
+        }
+
 #[derive(Clone, Default)]
 pub struct TokioRuntimeProvider {
     proxy: Option<ProxyConfig>,
@@ -573,6 +588,8 @@ impl crate::libdns::proto::runtime::RuntimeProvider for TokioRuntimeProvider {
         let wait_for = timeout.unwrap_or_else(|| Duration::from_secs(5));
 
         Box::pin(async move {
+            let semaphore = udp_create_semaphore();
+            let _permit = semaphore.acquire().await;
             async move {
                 proxy::connect_tcp(server_addr, proxy_config.as_ref())
                     .await
@@ -601,7 +618,11 @@ impl crate::libdns::proto::runtime::RuntimeProvider for TokioRuntimeProvider {
         let device = self.device.clone();
         let setup_socket = move |udp| setup_socket(udp, None, so_mark, device);
 
+        let semaphore = udp_create_semaphore();
+
         Box::pin(async move {
+            // 限制并发 socket 创建，防止 OS 资源耗尽 ("resource too busy")
+            let _permit = semaphore.acquire().await;
             proxy::connect_udp(server_addr, local_addr, proxy_config.as_ref())
                 .await
                 .map(setup_socket)
@@ -728,7 +749,7 @@ fn next_random_udp(bind_addr: SocketAddr) -> io::Result<std::net::UdpSocket> {
 
             match std::net::UdpSocket::bind(bind_addr) {
                 Ok(socket) => {
-                    log::debug!("created socket successfully");
+                    log::trace!("created socket successfully");
                     return Ok(socket);
                 }
                 Err(err) => {
