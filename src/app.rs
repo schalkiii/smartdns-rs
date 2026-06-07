@@ -326,10 +326,15 @@ pub fn serve(cfg: Arc<RuntimeConfig>) {
                 }
 
                 app.active_queries.fetch_add(count, Ordering::Relaxed);
-                let foreground = requests.iter().filter(|(_, opts, _)| !opts.is_background).count();
+                let foreground = requests
+                    .iter()
+                    .filter(|(_, opts, _)| !opts.is_background)
+                    .count();
                 let background = count - foreground;
-                app.total_queries.fetch_add(foreground as u64, Ordering::Relaxed);
-                app.bg_total_queries.fetch_add(background as u64, Ordering::Relaxed);
+                app.total_queries
+                    .fetch_add(foreground as u64, Ordering::Relaxed);
+                app.bg_total_queries
+                    .fetch_add(background as u64, Ordering::Relaxed);
 
                 let handler = app.mw_handler.read().await.clone();
 
@@ -338,20 +343,19 @@ pub fn serve(cfg: Arc<RuntimeConfig>) {
                 while let Some((message, server_opts, sender)) = requests.pop() {
                     let handler = handler.clone();
                     let app = app.clone();
-                    if server_opts.is_background {
-                        if Instant::now() - last_activity < MAX_IDLE {
-                            if bg_batch.len() < MAX_BACKGROUND_QUEUE {
-                                let app = app.clone();
-                                bg_batch.push(async move {
-                                    let start = Instant::now();
-                                    let result = process(handler, message, server_opts).await;
-                                    app.bg_total_query_time_ns
-                                        .fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
-                                    let _ = sender.send(result);
-                                });
-                            }
-                        }
-                    } else {
+                    if server_opts.is_background
+                        && Instant::now() - last_activity < MAX_IDLE
+                        && bg_batch.len() < MAX_BACKGROUND_QUEUE
+                    {
+                        let app = app.clone();
+                        bg_batch.push(async move {
+                            let start = Instant::now();
+                            let result = process(handler, message, server_opts).await;
+                            app.bg_total_query_time_ns
+                                .fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                            let _ = sender.send(result);
+                        });
+                    } else if !server_opts.is_background {
                         last_activity = Instant::now();
                         batch.push(async move {
                             let start = Instant::now();
@@ -363,28 +367,28 @@ pub fn serve(cfg: Arc<RuntimeConfig>) {
                     }
                 }
 
-                if !bg_batch.is_empty() {
-                    if let Ok(permit) = background_concurrency.clone().try_acquire_owned() {
-                        let mut batch = FuturesUnordered::new();
-                        std::mem::swap(&mut batch, &mut bg_batch);
-                        inner_join_set.spawn(async move {
-                            let count = batch.len();
-                            while (batch.next().await).is_some() {}
-                            drop(permit);
-                            count
-                        });
-                    }
+                if !bg_batch.is_empty()
+                    && let Ok(permit) = background_concurrency.clone().try_acquire_owned()
+                {
+                    let mut batch = FuturesUnordered::new();
+                    std::mem::swap(&mut batch, &mut bg_batch);
+                    inner_join_set.spawn(async move {
+                        let count = batch.len();
+                        while (batch.next().await).is_some() {}
+                        drop(permit);
+                        count
+                    });
                 }
 
-                if !batch.is_empty() {
-                    if let Ok(permit) = foreground_concurrency.clone().try_acquire_owned() {
-                        inner_join_set.spawn(async move {
-                            let count = batch.len();
-                            while (batch.next().await).is_some() {}
-                            drop(permit);
-                            count
-                        });
-                    }
+                if !batch.is_empty()
+                    && let Ok(permit) = foreground_concurrency.clone().try_acquire_owned()
+                {
+                    inner_join_set.spawn(async move {
+                        let count = batch.len();
+                        while (batch.next().await).is_some() {}
+                        drop(permit);
+                        count
+                    });
                 }
 
                 let finished = reap_tasks(&mut inner_join_set);

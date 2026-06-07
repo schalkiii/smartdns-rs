@@ -13,7 +13,7 @@ use crate::{
     dns::DnsResponse,
     dns_conf::NameServerInfo,
     dns_error::LookupError,
-    log::{self, debug, info, warn, trace},
+    log::{self, debug, info, trace, warn},
     proxy::ProxyConfig,
     rustls::TlsClientConfigBundle,
 };
@@ -93,10 +93,10 @@ impl DnsClientBuilder {
         let mut server_instances = HashMap::<&NameServerInfo, _>::new();
         let mut make_server = |server_config, resolver, dedup| {
             let entry = server_instances.entry(server_config);
-            if let std::collections::hash_map::Entry::Occupied(_) = entry {
-                if dedup {
-                    return None;
-                }
+            if let std::collections::hash_map::Entry::Occupied(_) = entry
+                && dedup
+            {
+                return None;
             }
             let server = entry.or_insert_with(|| {
                 let proxy = server_config

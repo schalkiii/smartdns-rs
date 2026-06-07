@@ -27,7 +27,7 @@ use crate::{
 };
 use lru::LruCache;
 use tokio::sync::Notify;
-use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, mpsc};
 use tokio::time::sleep;
 
 #[derive(Clone)]
@@ -146,10 +146,10 @@ impl DnsCacheMiddleware {
                     .unwrap_or(500),
             );
             let max_prefetch = std::env::var("PREFETCH_MAX_BATCH")
-                    .as_deref()
-                    .unwrap_or("5")
-                    .parse::<usize>()
-                    .unwrap_or(5);
+                .as_deref()
+                .unwrap_or("5")
+                .parse::<usize>()
+                .unwrap_or(5);
             // 每次检查最多取 16 条过期记录，防止启动时洪水般涌入 channel
             const PREFETCH_BATCH_SIZE: usize = 16;
             let mut last_check = Instant::now();
@@ -163,7 +163,14 @@ impl DnsCacheMiddleware {
                     last_check = now;
 
                     let expired = {
-                        let (expired, most_recent0) = cache.get_expired(now, Some(max_prefetch as u64), min_interval, PREFETCH_BATCH_SIZE).await;
+                        let (expired, most_recent0) = cache
+                            .get_expired(
+                                now,
+                                Some(max_prefetch as u64),
+                                min_interval,
+                                PREFETCH_BATCH_SIZE,
+                            )
+                            .await;
 
                         debug!(
                             "[prefetch] check: cache={} entries, elapsed {:?}",
@@ -181,10 +188,13 @@ impl DnsCacheMiddleware {
                             for (query, group) in expired {
                                 let query_name = query.name().to_string();
                                 // 使用 send 而非 try_send，提供背压，防止 channel 溢出
-                                match sender.send(PrefetchTask {
-                                    query,
-                                    rule_group: group,
-                                }).await {
+                                match sender
+                                    .send(PrefetchTask {
+                                        query,
+                                        rule_group: group,
+                                    })
+                                    .await
+                                {
                                     Ok(_) => debug!("[prefetch] queued: {}", query_name),
                                     Err(_) => {
                                         error!("[prefetch] channel closed");
@@ -207,8 +217,8 @@ impl DnsCacheMiddleware {
 }
 
 pub async fn prefetch_worker(mut receiver: mpsc::Receiver<PrefetchTask>, client: DnsHandle) {
-    use tokio::sync::Semaphore;
     use std::sync::Arc;
+    use tokio::sync::Semaphore;
 
     debug!("Prefetch worker started");
     // 限制并发 prefetch 查询数为 8，防止资源耗尽同时保证处理速度
@@ -298,7 +308,10 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
                                 }) {
                                     Ok(_) => debug!("[cache] bg-refresh queued: {}", query_name),
                                     Err(mpsc::error::TrySendError::Full(_)) => {
-                                        debug!("[cache] queue full, drop bg-refresh: {}", query_name);
+                                        debug!(
+                                            "[cache] queue full, drop bg-refresh: {}",
+                                            query_name
+                                        );
                                     }
                                     Err(mpsc::error::TrySendError::Closed(_)) => {
                                         error!("[cache] prefetch channel closed");
@@ -328,7 +341,10 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
                                 }) {
                                     Ok(_) => debug!("[cache] bg-refresh queued: {}", query_name),
                                     Err(mpsc::error::TrySendError::Full(_)) => {
-                                        debug!("[cache] queue full, drop bg-refresh: {}", query_name);
+                                        debug!(
+                                            "[cache] queue full, drop bg-refresh: {}",
+                                            query_name
+                                        );
                                     }
                                     Err(mpsc::error::TrySendError::Closed(_)) => {
                                         error!("[cache] prefetch channel closed");
@@ -1195,10 +1211,7 @@ mod tests {
     async fn test_prefetch_task_queue_full() {
         let (tx, mut rx) = mpsc::channel::<PrefetchTask>(2);
 
-        let query = Query::query(
-            "test.example.com.".parse().unwrap(),
-            RecordType::A,
-        );
+        let query = Query::query("test.example.com.".parse().unwrap(), RecordType::A);
         let task = PrefetchTask {
             query,
             rule_group: None,
@@ -1209,7 +1222,10 @@ mod tests {
 
         let full_result = tx.try_send(task);
         assert!(full_result.is_err());
-        assert!(matches!(full_result, Err(mpsc::error::TrySendError::Full(_))));
+        assert!(matches!(
+            full_result,
+            Err(mpsc::error::TrySendError::Full(_))
+        ));
 
         drop(tx);
         let count = rx.recv().await;
@@ -1224,10 +1240,7 @@ mod tests {
 
         let worker = tokio::spawn(prefetch_worker(rx, handle));
 
-        let query = Query::query(
-            "example.com.".parse().unwrap(),
-            RecordType::A,
-        );
+        let query = Query::query("example.com.".parse().unwrap(), RecordType::A);
         let task = PrefetchTask {
             query,
             rule_group: Some("test_group".to_string()),
@@ -1264,10 +1277,7 @@ mod tests {
 
         let domains = vec!["a.com", "b.com", "c.com"];
         for domain in domains {
-            let query = Query::query(
-                format!("{}.", domain).parse().unwrap(),
-                RecordType::A,
-            );
+            let query = Query::query(format!("{}.", domain).parse().unwrap(), RecordType::A);
             let task = PrefetchTask {
                 query,
                 rule_group: None,
@@ -1316,10 +1326,7 @@ mod tests {
 
     #[test]
     fn test_prefetch_task_public_fields() {
-        let query = Query::query(
-            "test.com.".parse().unwrap(),
-            RecordType::AAAA,
-        );
+        let query = Query::query("test.com.".parse().unwrap(), RecordType::AAAA);
         let task = PrefetchTask {
             query: query.clone(),
             rule_group: Some("group1".to_string()),

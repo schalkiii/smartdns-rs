@@ -7,7 +7,11 @@ use super::openapi::{
 };
 use super::{ServeState, StatefulRouter};
 use crate::{api::DataListPayload, config::CacheConfig, dns_mw_cache::CachedQueryRecord, log};
-use axum::{Json, extract::{Query, State}, http::StatusCode};
+use axum::{
+    Json,
+    extract::{Query, State},
+    http::StatusCode,
+};
 use serde::Deserialize;
 
 pub fn routes() -> StatefulRouter {

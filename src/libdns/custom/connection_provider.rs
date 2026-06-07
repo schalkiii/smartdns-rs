@@ -490,13 +490,20 @@ async fn new_connection(
 static UDP_CREATE_SEMAPHORE: OnceLock<Arc<Semaphore>> = OnceLock::new();
 
 fn udp_create_semaphore() -> Arc<Semaphore> {
-            UDP_CREATE_SEMAPHORE
-                .get_or_init(|| {
-                    // 限制并发 UDP socket 创建数为 8，避免 OS 资源耗尽
-                    Arc::new(Semaphore::new(8))
-                })
-                .clone()
-        }
+    UDP_CREATE_SEMAPHORE
+        .get_or_init(|| {
+            // 限制并发 UDP socket 创建数为 4，避免 OS 资源耗尽 (WSAENOBUFS)
+            Arc::new(Semaphore::new(4))
+        })
+        .clone()
+}
+
+/// 检测是否为 OS 资源耗尽错误 (WSAENOBUFS on Windows, ENOBUFS on Linux)
+fn is_resource_busy(err: &io::Error) -> bool {
+    // Windows: WSAENOBUFS = 10055
+    // Linux: ENOBUFS = 105
+    err.raw_os_error() == Some(10055) || err.raw_os_error() == Some(105)
+}
 
 #[derive(Clone, Default)]
 pub struct TokioRuntimeProvider {
@@ -616,16 +623,33 @@ impl crate::libdns::proto::runtime::RuntimeProvider for TokioRuntimeProvider {
 
         let so_mark = self.so_mark;
         let device = self.device.clone();
-        let setup_socket = move |udp| setup_socket(udp, None, so_mark, device);
 
         let semaphore = udp_create_semaphore();
 
         Box::pin(async move {
-            // 限制并发 socket 创建，防止 OS 资源耗尽 ("resource too busy")
-            let _permit = semaphore.acquire().await;
-            proxy::connect_udp(server_addr, local_addr, proxy_config.as_ref())
-                .await
-                .map(setup_socket)
+            let mut retries = 3u32;
+            loop {
+                // 限制并发 socket 创建，防止 OS 资源耗尽 ("resource too busy")
+                let _permit = semaphore.acquire().await;
+                match proxy::connect_udp(server_addr, local_addr, proxy_config.as_ref())
+                    .await
+                    .map(|udp| setup_socket(udp, None, so_mark, device.clone()))
+                {
+                    Ok(socket) => return Ok(socket),
+                    Err(err) if is_resource_busy(&err) && retries > 0 => {
+                        retries -= 1;
+                        log::debug!(
+                            "[ns] socket creation resource busy, retries left: {}, \
+                             waiting 50ms for OS to release buffer resources",
+                            retries,
+                        );
+                        // 释放信号量，等待 OS 释放缓冲资源后重试
+                        drop(_permit);
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                    Err(err) => return Err(err),
+                }
+            }
         })
     }
 
