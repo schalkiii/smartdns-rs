@@ -665,7 +665,8 @@ impl crate::libdns::proto::runtime::RuntimeProvider for TokioRuntimeProvider {
                         log::debug!(
                             "[ns] socket creation resource busy, retries left: {}, \
                              waiting {}ms for OS to release buffer resources",
-                            retries, backoff_ms,
+                            retries,
+                            backoff_ms,
                         );
                         // 释放信号量，等待 OS 释放缓冲资源后重试
                         drop(_permit);

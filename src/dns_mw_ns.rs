@@ -380,9 +380,10 @@ async fn lookup_ip(
 
                             true
                         }
-                    } {
-                        fastest_ip = Some(out);
                     }
+                {
+                    fastest_ip = Some(out);
+                }
 
                 if let Some(res) = query_res {
                     match res {

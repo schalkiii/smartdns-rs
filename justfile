@@ -174,7 +174,7 @@ fmt: patch
 
 # Check the clippy and format.
 cleanliness: patch
-  cargo clippy
+  cargo clippy -- -D warnings
   cargo fmt --all -- --check
 
 

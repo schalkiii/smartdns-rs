@@ -188,3 +188,103 @@ impl std::ops::AddAssign for ServerOpts {
         self.apply(rhs)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default() {
+        let opts = ServerOpts::default();
+        assert!(!opts.no_rule_addr());
+        assert!(!opts.no_rule_nameserver());
+        assert!(!opts.no_rule_ipset());
+        assert!(!opts.no_speed_check());
+        assert!(!opts.no_cache());
+        assert!(!opts.no_rule_soa());
+        assert!(!opts.no_dualstack_selection());
+        assert!(!opts.force_aaaa_soa());
+        assert!(!opts.force_https_soa());
+        assert!(!opts.no_serve_expired());
+        assert!(!opts.is_background);
+        assert!(opts.group().is_none());
+    }
+
+    #[test]
+    fn test_accessors_with_values() {
+        let opts = ServerOpts {
+            group: Some("test".into()),
+            no_rule_addr: Some(true),
+            no_rule_nameserver: Some(true),
+            no_rule_ipset: Some(true),
+            no_speed_check: Some(true),
+            no_cache: Some(true),
+            no_rule_soa: Some(true),
+            no_dualstack_selection: Some(true),
+            force_aaaa_soa: Some(true),
+            force_https_soa: Some(true),
+            no_serve_expired: Some(true),
+            is_background: true,
+            rule_group: Some("rg".into()),
+        };
+        assert_eq!(opts.group(), Some("test"));
+        assert!(opts.no_rule_addr());
+        assert!(opts.no_rule_nameserver());
+        assert!(opts.no_rule_ipset());
+        assert!(opts.no_speed_check());
+        assert!(opts.no_cache());
+        assert!(opts.no_rule_soa());
+        assert!(opts.no_dualstack_selection());
+        assert!(opts.force_aaaa_soa());
+        assert!(opts.force_https_soa());
+        assert!(opts.no_serve_expired());
+        assert!(opts.is_background);
+    }
+
+    #[test]
+    fn test_apply_merges_empty_fields() {
+        let mut opts = ServerOpts::default();
+        let other = ServerOpts {
+            group: Some("merged".into()),
+            no_cache: Some(true),
+            rule_group: Some("rg".into()),
+            ..Default::default()
+        };
+        opts.apply(other);
+        assert_eq!(opts.group(), Some("merged"));
+        assert!(opts.no_cache());
+        assert_eq!(opts.rule_group, Some("rg".into()));
+    }
+
+    #[test]
+    fn test_apply_preserves_existing() {
+        let mut opts = ServerOpts {
+            group: Some("original".into()),
+            no_cache: Some(true),
+            ..Default::default()
+        };
+        let other = ServerOpts {
+            group: Some("should_not_override".into()),
+            no_cache: Some(false),
+            ..Default::default()
+        };
+        opts.apply(other);
+        assert_eq!(opts.group(), Some("original"));
+        assert!(opts.no_cache());
+    }
+
+    #[test]
+    fn test_add_assign() {
+        let mut opts = ServerOpts {
+            group: Some("original".into()),
+            ..Default::default()
+        };
+        let other = ServerOpts {
+            no_cache: Some(true),
+            ..Default::default()
+        };
+        opts += other;
+        assert_eq!(opts.group(), Some("original"));
+        assert!(opts.no_cache());
+    }
+}

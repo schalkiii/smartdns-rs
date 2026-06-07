@@ -87,3 +87,88 @@ impl From<ProtoErrorKind> for LookupError {
         Self::Proto(value.into())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::libdns::proto::{
+        op::Query,
+        rr::{Name, RecordType},
+    };
+
+    #[test]
+    fn test_is_nx_domain() {
+        assert!(LookupError::ResponseCode(ResponseCode::NXDomain).is_nx_domain());
+        assert!(!LookupError::ResponseCode(ResponseCode::ServFail).is_nx_domain());
+        assert!(!LookupError::NameExists.is_nx_domain());
+    }
+
+    #[test]
+    fn test_is_soa_true() {
+        let name = Name::from_utf8("example.com").unwrap();
+        let query = Query::query(name, RecordType::A);
+        let err = LookupError::no_records_found(query, 300);
+        assert!(err.is_soa());
+    }
+
+    #[test]
+    fn test_is_soa_false() {
+        let err = LookupError::ResponseCode(ResponseCode::ServFail);
+        assert!(!err.is_soa());
+    }
+
+    #[test]
+    fn test_as_soa() {
+        let name = Name::from_utf8("example.com").unwrap();
+        let query = Query::query(name, RecordType::A);
+        let err = LookupError::no_records_found(query.clone(), 300);
+        let result = err.as_soa(&query);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_as_soa_none() {
+        let name = Name::from_utf8("example.com").unwrap();
+        let query = Query::query(name, RecordType::A);
+        let err = LookupError::ResponseCode(ResponseCode::ServFail);
+        assert!(err.as_soa(&query).is_none());
+    }
+
+    #[test]
+    fn test_no_records_found() {
+        let name = Name::from_utf8("example.com").unwrap();
+        let query = Query::query(name, RecordType::A);
+        let err = LookupError::no_records_found(query, 300);
+        assert!(err.is_soa());
+    }
+
+    #[test]
+    fn test_partial_eq_response_code() {
+        let a = LookupError::ResponseCode(ResponseCode::NXDomain);
+        let b = LookupError::ResponseCode(ResponseCode::NXDomain);
+        let c = LookupError::ResponseCode(ResponseCode::ServFail);
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn test_partial_eq_name_exists() {
+        let a = LookupError::NameExists;
+        let b = LookupError::NameExists;
+        assert_eq!(a, b);
+        assert_ne!(a, LookupError::ResponseCode(ResponseCode::ServFail));
+    }
+
+    #[test]
+    fn test_from_response_code() {
+        let err: LookupError = ResponseCode::NXDomain.into();
+        assert!(err.is_nx_domain());
+    }
+
+    #[test]
+    fn test_from_proto_error_kind() {
+        let kind = ProtoErrorKind::Message("test error");
+        let err: LookupError = kind.into();
+        assert!(matches!(err, LookupError::Proto(_)));
+    }
+}
