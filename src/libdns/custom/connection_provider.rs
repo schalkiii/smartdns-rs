@@ -14,10 +14,10 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::sync::{Arc, OnceLock};
 use std::task::Poll;
 use std::task::ready;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{io, net::SocketAddr, pin::Pin};
 
-use tokio::sync::Semaphore;
+use tokio::sync::{Mutex as TokioMutex, Semaphore};
 
 use crate::libdns::{
     proto::{
@@ -492,10 +492,27 @@ static UDP_CREATE_SEMAPHORE: OnceLock<Arc<Semaphore>> = OnceLock::new();
 fn udp_create_semaphore() -> Arc<Semaphore> {
     UDP_CREATE_SEMAPHORE
         .get_or_init(|| {
-            // 限制并发 UDP socket 创建数为 4，避免 OS 资源耗尽 (WSAENOBUFS)
-            Arc::new(Semaphore::new(4))
+            // 限制并发 UDP socket 创建数为 2，避免 OS 资源耗尽 (WSAENOBUFS)
+            Arc::new(Semaphore::new(2))
         })
         .clone()
+}
+
+/// 全局 socket 创建速率限制器，确保两次 socket 创建之间有最小间隔。
+/// 并发信号量只能限制同时创建数，但无法限制创建速率。
+/// 通过速率限制器，确保 OS 有足够时间释放缓冲资源。
+static SOCKET_RATE_LIMITER: OnceLock<TokioMutex<Instant>> = OnceLock::new();
+
+async fn socket_rate_limit() {
+    let mutex = SOCKET_RATE_LIMITER.get_or_init(|| TokioMutex::new(Instant::now()));
+    let mut last = mutex.lock().await;
+    let elapsed = last.elapsed();
+    // 两次 socket 创建之间至少间隔 100ms，给 OS 足够时间释放缓冲资源
+    let min_interval = Duration::from_millis(100);
+    if elapsed < min_interval {
+        tokio::time::sleep(min_interval - elapsed).await;
+    }
+    *last = Instant::now();
 }
 
 /// 检测是否为 OS 资源耗尽错误 (WSAENOBUFS on Windows, ENOBUFS on Linux)
@@ -595,6 +612,7 @@ impl crate::libdns::proto::runtime::RuntimeProvider for TokioRuntimeProvider {
         let wait_for = timeout.unwrap_or_else(|| Duration::from_secs(5));
 
         Box::pin(async move {
+            socket_rate_limit().await;
             let semaphore = udp_create_semaphore();
             let _permit = semaphore.acquire().await;
             async move {
@@ -627,9 +645,12 @@ impl crate::libdns::proto::runtime::RuntimeProvider for TokioRuntimeProvider {
         let semaphore = udp_create_semaphore();
 
         Box::pin(async move {
-            let mut retries = 3u32;
+            let mut retries = 5u32;
+            let mut backoff_ms = 50u64;
             loop {
-                // 限制并发 socket 创建，防止 OS 资源耗尽 ("resource too busy")
+                // 速率限制：确保 socket 创建之间有最小间隔，给 OS 时间释放缓冲资源
+                socket_rate_limit().await;
+                // 限制并发 socket 创建数量，防止同时创建过多 socket
                 let _permit = semaphore.acquire().await;
                 match proxy::connect_udp(server_addr, local_addr, proxy_config.as_ref())
                     .await
@@ -640,12 +661,14 @@ impl crate::libdns::proto::runtime::RuntimeProvider for TokioRuntimeProvider {
                         retries -= 1;
                         log::debug!(
                             "[ns] socket creation resource busy, retries left: {}, \
-                             waiting 50ms for OS to release buffer resources",
-                            retries,
+                             waiting {}ms for OS to release buffer resources",
+                            retries, backoff_ms,
                         );
                         // 释放信号量，等待 OS 释放缓冲资源后重试
                         drop(_permit);
-                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                        // 指数退避：50ms → 100ms → 200ms → 400ms → 800ms，最大 1 秒
+                        backoff_ms = (backoff_ms * 2).min(1000);
                     }
                     Err(err) => return Err(err),
                 }

@@ -183,23 +183,23 @@ impl DnsCacheMiddleware {
                         expired
                     };
 
-                    if !expired.is_empty() {
-                        if let Some(sender) = sender.as_ref() {
-                            for (query, group) in expired {
-                                let query_name = query.name().to_string();
-                                // 使用 send 而非 try_send，提供背压，防止 channel 溢出
-                                match sender
-                                    .send(PrefetchTask {
-                                        query,
-                                        rule_group: group,
-                                    })
-                                    .await
-                                {
-                                    Ok(_) => debug!("[prefetch] queued: {}", query_name),
-                                    Err(_) => {
-                                        error!("[prefetch] channel closed");
-                                        break;
-                                    }
+                    if !expired.is_empty()
+                        && let Some(sender) = sender.as_ref()
+                    {
+                        for (query, group) in expired {
+                            let query_name = query.name().to_string();
+                            // 使用 send 而非 try_send，提供背压，防止 channel 溢出
+                            match sender
+                                .send(PrefetchTask {
+                                    query,
+                                    rule_group: group,
+                                })
+                                .await
+                            {
+                                Ok(_) => debug!("[prefetch] queued: {}", query_name),
+                                Err(_) => {
+                                    error!("[prefetch] channel closed");
+                                    break;
                                 }
                             }
                         }
@@ -408,12 +408,12 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
                         )
                         .await;
 
-                    if ctx.cfg().prefetch_domain() {
-                        if let Some(ttl) = lookup.min_ttl() {
-                            self.prefetch_notify
-                                .notify_after(Duration::from_secs(ttl as u64))
-                                .await;
-                        }
+                    if ctx.cfg().prefetch_domain()
+                        && let Some(ttl) = lookup.min_ttl()
+                    {
+                        self.prefetch_notify
+                            .notify_after(Duration::from_secs(ttl as u64))
+                            .await;
                     }
                 }
                 Ok(lookup)
@@ -821,11 +821,10 @@ impl<T> DnsCacheEntry<T> {
         if !self.is_in_prefetching {
             return true;
         }
-        if let Some(failure_time) = self.prefetch_failure_time {
-            let exponential_delay = base_interval * 2.min(64);
-            if now >= failure_time + exponential_delay {
-                return true;
-            }
+        if let Some(failure_time) = self.prefetch_failure_time
+            && now >= failure_time + base_interval * 2
+        {
+            return true;
         }
         false
     }
@@ -1047,7 +1046,7 @@ mod tests {
 
     #[test]
     fn test_lookup_serde() {
-        let lookups = vec![
+        let lookups = [
             create_lookup(
                 "abc.exmample.com.",
                 RData::A("127.0.0.1".parse().unwrap()),

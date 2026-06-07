@@ -529,16 +529,16 @@ mod name_server {
 
             let client_subnet = options.client_subnet.or(self.options().client_subnet);
 
-            if options.client_subnet.is_none() {
-                if let Some(subnet) = client_subnet.as_ref() {
-                    log::debug!(
-                        "[ns] query: {} {} subnet: {}/{}",
-                        query.name(),
-                        query.query_type(),
-                        subnet.addr(),
-                        subnet.scope_prefix(),
-                    );
-                }
+            if options.client_subnet.is_none()
+                && let Some(subnet) = client_subnet.as_ref()
+            {
+                log::debug!(
+                    "[ns] query: {} {} subnet: {}/{}",
+                    query.name(),
+                    query.query_type(),
+                    subnet.addr(),
+                    subnet.scope_prefix(),
+                );
             }
 
             let request_options = {
