@@ -928,6 +928,7 @@ mod tests {
 
     #[tokio::test]
     #[cfg(feature = "dns-over-tls")]
+    #[ignore = "requires stable external network connectivity to multiple DNS-over-TLS providers"]
     async fn test_nameserver_tls_resolve() {
         let urls = [
             DnsUrl::from_str("tls://dns.google?enable_sni=false").unwrap(),
@@ -978,6 +979,7 @@ mod tests {
 
     #[tokio::test]
     #[cfg(feature = "dns-over-h3")]
+    #[ignore = "requires stable external network connectivity (H3/QUIC may be blocked by firewalls)"]
     async fn test_nameserver_h3_resolve() {
         let urls = [DnsUrl::from_str("h3://dns.adguard-dns.com/dns-query").unwrap()];
 
@@ -1050,6 +1052,7 @@ mod tests {
 
     #[tokio::test]
     #[cfg(feature = "dns-over-quic")]
+    #[ignore = "requires stable external network connectivity (QUIC may be blocked by firewalls)"]
     async fn test_nameserver_quic_resolve() {
         let urls = [
             DnsUrl::from_str("quic://dns.adguard-dns.com").unwrap(),
@@ -1070,6 +1073,7 @@ mod tests {
 
     #[tokio::test]
     #[cfg(feature = "dns-over-quic")]
+    #[ignore = "requires stable external network connectivity (QUIC may be blocked by firewalls)"]
     async fn test_nameserver_quic_over_proxy_resolve() {
         let urls = [
             DnsUrl::from_str("quic://dns.adguard-dns.com").unwrap(),

@@ -905,6 +905,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires stable external network connectivity to HTTPS endpoints"]
     fn test_ping_https() {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()

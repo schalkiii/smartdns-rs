@@ -487,20 +487,23 @@ async fn new_connection(
 /// The Tokio Runtime for async execution
 /// 全局 UDP socket 创建信号量，限制并发 socket 创建数量，防止 OS 资源耗尽。
 /// Windows 上大量并发创建 socket 会导致 "resource too busy" 错误 (WSAENOBUFS)。
+/// 注意：信号量与速率限制器配合使用。速率限制器（100ms 间隔）是主防线，
+/// 信号量是辅助安全网，防止极端并发场景下的瞬时突发。
 static UDP_CREATE_SEMAPHORE: OnceLock<Arc<Semaphore>> = OnceLock::new();
 
 fn udp_create_semaphore() -> Arc<Semaphore> {
     UDP_CREATE_SEMAPHORE
         .get_or_init(|| {
-            // 限制并发 UDP socket 创建数为 2，避免 OS 资源耗尽 (WSAENOBUFS)
-            Arc::new(Semaphore::new(2))
+            // 限制并发 UDP socket 创建数为 8，配合 100ms 速率限制器使用
+            Arc::new(Semaphore::new(8))
         })
         .clone()
 }
 
 /// 全局 socket 创建速率限制器，确保两次 socket 创建之间有最小间隔。
-/// 并发信号量只能限制同时创建数，但无法限制创建速率。
-/// 通过速率限制器，确保 OS 有足够时间释放缓冲资源。
+/// 这是防止 "resource too busy" 的主防线——通过串行化 socket 创建，
+/// 给 OS 足够时间释放缓冲资源，从根本上避免 WSAENOBUFS。
+/// 信号量（UDP_CREATE_SEMAPHORE）作为辅助安全网，防止极端并发下的瞬时突发。
 static SOCKET_RATE_LIMITER: OnceLock<TokioMutex<Instant>> = OnceLock::new();
 
 async fn socket_rate_limit() {
