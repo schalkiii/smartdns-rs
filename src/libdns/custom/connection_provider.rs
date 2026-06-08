@@ -875,6 +875,7 @@ mod tests {
     use crate::proxy::{ProxyConfig, ProxyProtocol};
     use std::io;
     use std::net::SocketAddrV4;
+    use std::sync::atomic::{AtomicU32, Ordering};
     use tokio::time::Instant;
 
     /// 测试 `is_resource_busy` 函数在不同平台上的资源耗尽错误检测
@@ -1266,6 +1267,241 @@ mod tests {
         assert!(
             success + resource_busy <= total as u32,
             "计数不应超过 total"
+        );
+    }
+
+    /// 模拟生产环境多组并发启动：多个 DNS 服务器组，
+    /// 每组包含多个服务器，同时进行 warmup。
+    /// 这是最接近生产启动场景（join_all over groups, join_all within each group）的压力测试。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_stress_multi_group_warmup_simulation() {
+        const SOCKET_COUNT: usize = 80;
+        const GROUPS: usize = 4;
+        const PER_GROUP: usize = SOCKET_COUNT / GROUPS;
+
+        let provider = TokioRuntimeProvider::new(None, None, None);
+        let resource_busy = Arc::new(AtomicU32::new(0));
+        let total_attempts = Arc::new(AtomicU32::new(0));
+
+        let mut group_handles = Vec::new();
+
+        for g in 0..GROUPS {
+            let provider = provider.clone();
+            let resource_busy = resource_busy.clone();
+            let total_attempts = total_attempts.clone();
+
+            let handle = tokio::spawn(async move {
+                // 每个 group 内部并发创建 PER_GROUP 个 socket（模拟 group warmup 的 join_all）
+                let mut tasks = Vec::new();
+                for i in 0..PER_GROUP {
+                    let provider = provider.clone();
+                    let resource_busy = resource_busy.clone();
+                    let total_attempts = total_attempts.clone();
+                    let local_addr = SocketAddr::new(
+                        IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+                        30000u16 + (g * PER_GROUP + i) as u16,
+                    );
+                    let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 53);
+
+                    let g = g;
+                    tasks.push(tokio::spawn(async move {
+                        let result = provider.bind_udp(local_addr, server_addr).await;
+
+                        match &result {
+                            Err(err) if is_resource_busy(err) => {
+                                resource_busy.fetch_add(1, Ordering::Relaxed);
+                                eprintln!(
+                                    "[MULTI-GROUP] group={g} port={} RESOURCE BUSY",
+                                    local_addr.port()
+                                );
+                            }
+                            Err(err) => {
+                                eprintln!(
+                                    "[MULTI-GROUP] group={g} port={} error: {err}",
+                                    local_addr.port()
+                                );
+                            }
+                            Ok(_) => {}
+                        }
+                        total_attempts.fetch_add(1, Ordering::Relaxed);
+                    }));
+                }
+
+                futures::future::join_all(tasks).await
+            });
+
+            group_handles.push(handle);
+        }
+
+        let start = std::time::Instant::now();
+        futures::future::join_all(group_handles).await;
+        let elapsed = start.elapsed();
+
+        let resource_busy = resource_busy.load(Ordering::Relaxed);
+        let total = total_attempts.load(Ordering::Relaxed);
+
+        eprintln!(
+            "[MULTI-GROUP-WARMUP] {total} total, {resource_busy} resource_busy, \
+             {groups} groups, elapsed: {elapsed:?}",
+            groups = GROUPS
+        );
+
+        assert!(
+            resource_busy == 0,
+            "多组并发启动时 resource_busy 穿透: {resource_busy} 次 / {total} total"
+        );
+    }
+
+    /// 混合协议并发压力测试：同时创建 UDP + TCP socket，
+    /// 模拟实际 DNS 查询中混合协议场景。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_stress_mixed_protocol_concurrent() {
+        const TOTAL: usize = 60;
+        const HALF: usize = TOTAL / 2;
+
+        let provider = TokioRuntimeProvider::new(None, None, None);
+        let resource_busy = Arc::new(AtomicU32::new(0));
+
+        let mut handles = Vec::with_capacity(TOTAL);
+
+        // UDP tasks
+        for i in 0..HALF {
+            let provider = provider.clone();
+            let resource_busy = resource_busy.clone();
+            let local_addr =
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 40000u16 + i as u16);
+            let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 53);
+            handles.push(tokio::spawn(async move {
+                let result = provider.bind_udp(local_addr, server_addr).await;
+                if let Err(err) = &result
+                    && is_resource_busy(err)
+                {
+                    resource_busy.fetch_add(1, Ordering::Relaxed);
+                }
+            }));
+        }
+
+        // TCP tasks
+        for i in 0..HALF {
+            let provider = provider.clone();
+            let resource_busy = resource_busy.clone();
+            let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1)), 53);
+            let bind_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 50000u16 + i as u16);
+            handles.push(tokio::spawn(async move {
+                let result = provider
+                    .connect_tcp(server_addr, Some(bind_addr), Some(Duration::from_secs(1)))
+                    .await;
+                if let Err(err) = &result
+                    && is_resource_busy(err)
+                {
+                    resource_busy.fetch_add(1, Ordering::Relaxed);
+                }
+            }));
+        }
+
+        let start = std::time::Instant::now();
+        futures::future::join_all(handles).await;
+        let elapsed = start.elapsed();
+
+        let resource_busy = resource_busy.load(Ordering::Relaxed);
+
+        eprintln!(
+            "[MIXED-PROTOCOL] {total} total, {resource_busy} resource_busy, elapsed: {elapsed:?}",
+            total = TOTAL
+        );
+
+        assert!(
+            resource_busy == 0,
+            "混合协议并发时 resource_busy 穿透: {resource_busy} 次"
+        );
+    }
+
+    /// 全压力测试：组合所有场景，超大并发量。
+    /// 使用 16 个 Tokio 工作线程，模拟高并发生产环境。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+    async fn test_stress_full_blast() {
+        const TOTAL_UDP: usize = 80;
+        const TOTAL_TCP: usize = 40;
+        const TOTAL_QUIC: usize = 30; // next_random_udp 模式
+
+        let provider = TokioRuntimeProvider::new(None, None, None);
+        let resource_busy = Arc::new(AtomicU32::new(0));
+        let quic_resource_busy = Arc::new(AtomicU32::new(0));
+
+        let mut handles = Vec::with_capacity(TOTAL_UDP + TOTAL_TCP + TOTAL_QUIC);
+
+        // UDP tasks (信号量保护)
+        for i in 0..TOTAL_UDP {
+            let provider = provider.clone();
+            let resource_busy = resource_busy.clone();
+            let local_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 1024u16 + i as u16);
+            let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 53);
+            handles.push(tokio::spawn(async move {
+                let result = provider.bind_udp(local_addr, server_addr).await;
+                if let Err(err) = &result
+                    && is_resource_busy(err)
+                {
+                    resource_busy.fetch_add(1, Ordering::Relaxed);
+                }
+            }));
+        }
+
+        // TCP tasks (信号量保护)
+        for i in 0..TOTAL_TCP {
+            let provider = provider.clone();
+            let resource_busy = resource_busy.clone();
+            let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1)), 53);
+            let bind_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 50000u16 + i as u16);
+            handles.push(tokio::spawn(async move {
+                let result = provider
+                    .connect_tcp(server_addr, Some(bind_addr), Some(Duration::from_secs(1)))
+                    .await;
+                if let Err(err) = &result
+                    && is_resource_busy(err)
+                {
+                    resource_busy.fetch_add(1, Ordering::Relaxed);
+                }
+            }));
+        }
+
+        // QUIC path tasks (next_random_udp, Mutex 保护)
+        for _ in 0..TOTAL_QUIC {
+            let quic_resource_busy = quic_resource_busy.clone();
+            let bind_addr = SocketAddr::new(
+                IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+                0, // 随机端口模式
+            );
+            handles.push(tokio::spawn(async move {
+                let result = tokio::task::spawn_blocking(move || next_random_udp(bind_addr)).await;
+                match result {
+                    Ok(Err(err)) if is_resource_busy(&err) => {
+                        quic_resource_busy.fetch_add(1, Ordering::Relaxed);
+                    }
+                    _ => {}
+                }
+            }));
+        }
+
+        let start = std::time::Instant::now();
+        futures::future::join_all(handles).await;
+        let elapsed = start.elapsed();
+
+        let resource_busy = resource_busy.load(Ordering::Relaxed);
+        let quic_busy = quic_resource_busy.load(Ordering::Relaxed);
+
+        eprintln!(
+            "[FULL-BLAST] udp_tcp_busy={resource_busy} quic_busy={quic_busy} \
+             total={total} elapsed={elapsed:?}",
+            total = TOTAL_UDP + TOTAL_TCP + TOTAL_QUIC
+        );
+
+        assert!(
+            resource_busy == 0,
+            "全压力测试 UDP/TCP resource_busy 穿透: {resource_busy}"
+        );
+        assert!(
+            quic_busy == 0,
+            "全压力测试 QUIC resource_busy 穿透: {quic_busy}"
         );
     }
 }
