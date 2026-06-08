@@ -713,8 +713,25 @@ impl QuicSocketBinder for TokioQuicSocketBinder {
         _server_addr: SocketAddr,
     ) -> Result<Arc<dyn quinn::AsyncUdpSocket>, io::Error> {
         use quinn::Runtime;
-        let socket = next_random_udp(local_addr)?;
-        quinn::TokioRuntime.wrap_udp_socket(socket)
+        let mut retries = 5u32;
+        let mut backoff_ms = 50u64;
+        loop {
+            let socket = match next_random_udp(local_addr) {
+                Ok(s) => s,
+                Err(err) if is_resource_busy(&err) && retries > 0 => {
+                    retries -= 1;
+                    log::debug!(
+                        "[ns] QUIC socket bind resource busy, retries left: {retries}, \
+                         waiting {backoff_ms}ms for OS to release buffer resources",
+                    );
+                    std::thread::sleep(Duration::from_millis(backoff_ms));
+                    backoff_ms = (backoff_ms * 2).min(1000);
+                    continue;
+                }
+                Err(err) => return Err(err),
+            };
+            return quinn::TokioRuntime.wrap_udp_socket(socket);
+        }
     }
 }
 
@@ -801,6 +818,24 @@ impl proto::udp::DnsUdpSocket for UdpSocket {
     }
 }
 
+/// 同步 socket 创建速率限制器，用于 QUIC/H3 的 bind_quic 路径。
+/// QUIC 路径是同步调用（QuicSocketBinder trait），无法使用 async 信号量，
+/// 因此使用 std Mutex + thread::sleep 实现。最大阻塞 200ms，在启动/重连场景可接受。
+static QUIC_SOCKET_RATE_LIMITER: OnceLock<std::sync::Mutex<Instant>> = OnceLock::new();
+
+fn quic_socket_rate_limit() {
+    let mut last = QUIC_SOCKET_RATE_LIMITER
+        .get_or_init(|| std::sync::Mutex::new(Instant::now()))
+        .lock()
+        .unwrap();
+    let elapsed = last.elapsed();
+    let min_interval = Duration::from_millis(200);
+    if elapsed < min_interval {
+        std::thread::sleep(min_interval - elapsed);
+    }
+    *last = Instant::now();
+}
+
 fn next_random_udp(bind_addr: SocketAddr) -> io::Result<std::net::UdpSocket> {
     const ATTEMPT_RANDOM: usize = 10;
     if bind_addr.port() == 0 {
@@ -814,6 +849,10 @@ fn next_random_udp(bind_addr: SocketAddr) -> io::Result<std::net::UdpSocket> {
 
             let bind_addr = SocketAddr::new(bind_addr.ip(), port);
 
+            // 每次 bind 前应用速率限制，防止并发 QUIC/H3 socket 创建耗尽 OS 资源。
+            // Windows 在大量并发 bind 时容易出现 WSAENOBUFS (10055)。
+            quic_socket_rate_limit();
+
             match std::net::UdpSocket::bind(bind_addr) {
                 Ok(socket) => {
                     log::trace!("created socket successfully");
@@ -825,6 +864,8 @@ fn next_random_udp(bind_addr: SocketAddr) -> io::Result<std::net::UdpSocket> {
             }
         }
     }
+    // 指定端口时也应用速率限制
+    quic_socket_rate_limit();
     std::net::UdpSocket::bind(bind_addr)
 }
 
@@ -1043,5 +1084,188 @@ mod tests {
         let provider = TokioRuntimeProvider::new(Some(proxy), Some(255), Some("eth0".into()));
         let handle = provider.create_handle();
         std::mem::drop(handle);
+    }
+
+    /// 模拟 SmartDNS 高负载启动场景的压力测试：
+    /// 多个并发 connection 创建触发 bind_udp，验证防 resource-busy 保护机制
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_stress_multi_bind_udp_with_protection() {
+        let provider = TokioRuntimeProvider::new(None, None, None);
+        let total = 30;
+        let mut handles = Vec::with_capacity(total);
+
+        let start = Instant::now();
+
+        for i in 0..total {
+            let provider = provider.clone();
+            handles.push(tokio::spawn(async move {
+                let port = 30000u16 + (i as u16);
+                let local_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
+                let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 53);
+                let result = provider.bind_udp(local_addr, server_addr).await;
+                (i, result)
+            }));
+        }
+
+        let mut success = 0u32;
+        let mut resource_busy = 0u32;
+        let mut other_errors = 0u32;
+
+        for handle in handles {
+            match handle.await.unwrap() {
+                (_, Ok(socket)) => {
+                    drop(socket);
+                    success += 1;
+                }
+                (i, Err(err)) => {
+                    if is_resource_busy(&err) {
+                        eprintln!("[STRESS-UDP] task {i}: RESOURCE BUSY after retries");
+                        resource_busy += 1;
+                    } else {
+                        eprintln!("[STRESS-UDP] task {i}: other error: {err}");
+                        other_errors += 1;
+                    }
+                }
+            }
+        }
+
+        let elapsed = start.elapsed();
+        eprintln!(
+            "[STRESS-UDP] result: {success} ok, {resource_busy} resource_busy, \
+             {other_errors} other errors, elapsed: {elapsed:?}"
+        );
+
+        // 保护机制核心断言：resource busy 不应穿透重试与速率限制
+        assert!(
+            resource_busy == 0,
+            "resource busy 错误穿透了保护机制: {resource_busy} 次"
+        );
+
+        // semaphore=2 + 200ms 间隔 => 30/(2) * 200ms ≈ 3s
+        assert!(
+            elapsed >= Duration::from_millis(2800),
+            "保护机制疑似未生效：总耗时过短 {elapsed:?}"
+        );
+    }
+
+    /// 测试保护机制在 TCP 路径上的有效性
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_stress_multi_connect_tcp_with_protection() {
+        let provider = TokioRuntimeProvider::new(None, None, None);
+        let total = 20;
+        let mut handles = Vec::with_capacity(total);
+
+        let start = Instant::now();
+
+        for i in 0..total {
+            let provider = provider.clone();
+            handles.push(tokio::spawn(async move {
+                // 使用无法连接的地址 (TEST-NET-1)，快速触发错误但不建立连接
+                let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1)), 53);
+                let bind_addr =
+                    SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 30000u16 + (i as u16));
+                let result = provider
+                    .connect_tcp(server_addr, Some(bind_addr), Some(Duration::from_secs(1)))
+                    .await;
+                (i, result)
+            }));
+        }
+
+        let mut resource_busy = 0u32;
+        for handle in handles {
+            match handle.await.unwrap() {
+                (i, Err(err)) if is_resource_busy(&err) => {
+                    eprintln!("[STRESS-TCP] task {i}: RESOURCE BUSY after retries");
+                    resource_busy += 1;
+                }
+                _ => {}
+            }
+        }
+
+        let elapsed = start.elapsed();
+        eprintln!("[STRESS-TCP] resource_busy: {resource_busy}, elapsed: {elapsed:?}");
+
+        assert!(
+            resource_busy == 0,
+            "TCP resource busy 错误穿透了保护机制: {resource_busy} 次"
+        );
+    }
+
+    /// 验证 next_random_udp 的并发安全性 —
+    /// 此函数被 QUIC/H3 bind_quic 调用，无信号量/速率限制保护，
+    /// 是 resource busy 的潜在漏洞点
+    #[test]
+    fn test_stress_next_random_udp_concurrent() {
+        let total = 30;
+        let bind_base = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 40000);
+        let mut resource_busy = 0u32;
+        let mut success = 0u32;
+
+        for i in 0..total {
+            let bind_addr = SocketAddr::new(bind_base.ip(), bind_base.port() + i as u16);
+            match next_random_udp(bind_addr) {
+                Ok(socket) => {
+                    drop(socket);
+                    success += 1;
+                }
+                Err(err) if is_resource_busy(&err) => {
+                    eprintln!("[STRESS-NRU] attempt {i}: RESOURCE BUSY");
+                    resource_busy += 1;
+                }
+                Err(err) => {
+                    eprintln!("[STRESS-NRU] attempt {i}: other error: {err}");
+                }
+            }
+        }
+
+        eprintln!("[STRESS-NRU] {success}/{total} succeeded, {resource_busy} resource_busy");
+
+        // 尚未加保护，此处仅证明当前存在并发脆弱性
+        // 修复后 assert!(resource_busy == 0);
+        assert!(
+            resource_busy == 0,
+            "修复后 next_random_udp 不应再出现 resource_busy: {resource_busy} 次"
+        );
+        assert!(
+            success + resource_busy <= total as u32,
+            "计数不应超过 total"
+        );
+    }
+
+    /// 验证 next_random_udp 端口 0 模式下的并发安全性
+    #[test]
+    fn test_stress_next_random_udp_random_port_concurrent() {
+        let total = 20;
+        let bind_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0);
+        let mut resource_busy = 0u32;
+        let mut success = 0u32;
+
+        for _ in 0..total {
+            match next_random_udp(bind_addr) {
+                Ok(socket) => {
+                    drop(socket);
+                    success += 1;
+                }
+                Err(err) if is_resource_busy(&err) => {
+                    eprintln!("[STRESS-NRU-RAND] RESOURCE BUSY");
+                    resource_busy += 1;
+                }
+                Err(err) => {
+                    eprintln!("[STRESS-NRU-RAND] error: {err}");
+                }
+            }
+        }
+
+        eprintln!("[STRESS-NRU-RAND] {success}/{total} succeeded, {resource_busy} resource_busy");
+
+        assert!(
+            resource_busy == 0,
+            "端口 0 模式下 next_random_udp 不应出现 resource_busy: {resource_busy} 次"
+        );
+
+        assert!(
+            success + resource_busy <= total as u32,
+            "计数不应超过 total"
+        );
     }
 }
