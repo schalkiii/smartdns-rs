@@ -267,7 +267,10 @@ cd smartdns-rs
 # install https://github.com/casey/just
 cargo install just
 
-# build
+# build (with web-ui dashboard)
+just build --release --features web-ui
+
+# build (without web-ui, minimal binary)
 just build --release
 
 # print help

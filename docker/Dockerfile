@@ -7,7 +7,7 @@ RUN mkdir -p /app/x86 /app/arm64 /app/armv7 /app/extracted/x86 /app/extracted/ar
 
 COPY ./smartdns-x86_64-unknown-linux-musl.tar.gz /app/x86/smartdns.tar.gz
 COPY ./smartdns-aarch64-unknown-linux-musl.tar.gz /app/arm64/smartdns.tar.gz
-COPY ./smartdns-aarch64-unknown-linux-musl.tar.gz /app/armv7/smartdns.tar.gz
+COPY ./smartdns-arm-unknown-linux-musleabihf.tar.gz /app/armv7/smartdns.tar.gz
 
 RUN tar -xvf /app/x86/smartdns.tar.gz -C /app/extracted/x86
 RUN tar -xvf /app/arm64/smartdns.tar.gz -C /app/extracted/arm64
