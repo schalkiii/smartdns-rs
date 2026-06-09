@@ -396,26 +396,26 @@ mod name_server_group {
             name: N,
             options: O,
         ) -> Result<DnsResponse, LookupError> {
-            use futures_util::future::select_all;
+            use futures_util::stream::FuturesUnordered;
+            use futures_util::StreamExt;
             let name = name.into_name()?;
-            let mut tasks = self
+            let mut tasks: FuturesUnordered<_> = self
                 .servers
                 .iter()
                 .map(|ns| GenericResolver::lookup(ns.as_ref(), name.clone(), options.clone()))
-                .collect::<Vec<_>>();
+                .collect();
 
-            loop {
-                let (res, _idx, rest) = select_all(tasks).await;
-
+            while let Some(res) = tasks.next().await {
                 if matches!(res.as_ref(), Ok(lookup) if !lookup.records().is_empty()) {
                     return res;
                 }
 
-                if rest.is_empty() {
+                if tasks.is_empty() {
                     return res;
                 }
-                tasks = rest;
             }
+
+            Err(crate::libdns::proto::ProtoErrorKind::NoConnections.into())
         }
     }
 }

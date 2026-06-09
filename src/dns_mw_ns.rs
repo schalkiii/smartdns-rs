@@ -7,7 +7,6 @@ use crate::dns_client::{LookupOptions, NameServer};
 
 use crate::infra::ipset::{IpMap, IpSet};
 use crate::infra::ping::{PingError, PingOutput};
-use crate::third_ext::FutureTimeoutExt;
 use crate::{
     config::{ResponseMode, SpeedCheckMode, SpeedCheckModeList},
     dns::*,
@@ -19,7 +18,8 @@ use crate::{
 
 use crate::libdns::proto::rr::domain::usage::LOCAL;
 use crate::libdns::proto::{AuthorityData, op::ResponseCode, rr::rdata::opt::EdnsCode};
-use futures::FutureExt;
+use futures::stream::FuturesUnordered;
+use futures::{FutureExt, StreamExt, future::BoxFuture};
 use rr::rdata::opt::EdnsOption;
 use tokio::time::sleep;
 
@@ -194,279 +194,301 @@ impl From<&LookupIpOptions> for LookupOptions {
     }
 }
 
+/// IP 查询策略执行结果
+enum IpStrategyResult {
+    /// 直接返回完整 DNS 响应（FastestResponse 策略或 FirstPing 单 IP 场景）
+    DirectResponse(Box<DnsResponse>),
+    /// 选出了最优 IP，附带成功和失败的任务结果
+    SelectedIp(IpAddr, Vec<DnsResponse>, Vec<DnsError>),
+    /// 无明确最优 IP，回退到按响应顺序返回
+    Fallback(Vec<DnsResponse>, Vec<DnsError>),
+    Error(LookupError),
+}
+
+/// 将 IpStrategyResult 转换为标准 Result<DnsResponse, LookupError>
+fn handle_strategy_result(result: IpStrategyResult) -> Result<DnsResponse, LookupError> {
+    match result {
+        IpStrategyResult::DirectResponse(response) => Ok(*response),
+        IpStrategyResult::SelectedIp(selected_ip, ok_tasks, _err_tasks) => {
+            for mut res in ok_tasks {
+                let record = res
+                    .take_answers()
+                    .into_iter()
+                    .find(|r| matches!(r.data().ip_addr(), Some(ip) if ip == selected_ip));
+                if let Some(record) = record {
+                    res.add_answer(record);
+                    return Ok(res);
+                }
+            }
+            unreachable!("selected_ip 必定存在于 ok_tasks 中")
+        }
+        IpStrategyResult::Fallback(ok_tasks, err_tasks) => match ok_tasks.into_iter().next() {
+            Some(lookup) => Ok(lookup),
+            None => match err_tasks.into_iter().next() {
+                Some(err) => Err(err),
+                None => unreachable!(),
+            },
+        },
+        IpStrategyResult::Error(err) => Err(err),
+    }
+}
+
 async fn lookup_ip(
     server: &NameServerGroup,
     name: Name,
     options: &LookupIpOptions,
 ) -> Result<DnsResponse, LookupError> {
     use ResponseMode::*;
-    use futures_util::future::{Either, select, select_all};
 
     assert!(options.record_type.is_ip_addr());
 
-    let mut query_tasks = server
-        .iter()
-        .map(|ns| per_nameserver_lookup_ip(ns, name.clone(), options).boxed())
-        .collect::<Vec<_>>();
-
-    if query_tasks.is_empty() {
+    if server.is_empty() {
         return Err(ProtoErrorKind::NoConnections.into());
     }
 
-    // ignore speed check
-    let mut response_strategy = if options.no_speed_check || options.speed_check_mode.is_none() {
+    // 速度检查忽略逻辑
+    let response_strategy = if options.no_speed_check || options.speed_check_mode.is_none() {
         FastestResponse
     } else {
         options.response_strategy
     };
 
-    let mut speed_check_mode = options
+    let speed_check_mode = options
         .speed_check_mode
         .as_ref()
         .map(|m| m.as_slice())
         .unwrap_or_default();
 
-    if speed_check_mode.iter().any(|m| m.is_none()) {
-        response_strategy = FastestResponse; // ignore speed check
-        speed_check_mode = &[];
+    let (response_strategy, speed_check_mode) =
+        if speed_check_mode.iter().any(|m| m.is_none()) {
+            (FastestResponse, &[][..])
+        } else {
+            (response_strategy, speed_check_mode)
+        };
+
+    let result = match response_strategy {
+        FirstPing => lookup_ip_first_ping(server, &name, options, speed_check_mode).await,
+        FastestIp => lookup_ip_fastest_ip(server, &name, options, speed_check_mode).await,
+        FastestResponse => lookup_ip_fastest_response(server, &name, options).await,
+    };
+
+    handle_strategy_result(result)
+}
+
+/// FirstPing 策略: ping 最快 IP 优先，无 ping 结果时回退到多数 IP
+async fn lookup_ip_first_ping(
+    server: &NameServerGroup,
+    name: &Name,
+    options: &LookupIpOptions,
+    speed_check_mode: &[SpeedCheckMode],
+) -> IpStrategyResult {
+    // 统一事件流：Ping 和 Query 合并到同一个 FuturesUnordered
+    enum Event {
+        Ping(Option<IpAddr>),
+        Query(Box<Result<DnsResponse, LookupError>>),
     }
 
-    let mut ok_tasks = vec![];
-    let mut err_tasks = vec![];
+    let mut events: FuturesUnordered<BoxFuture<'_, Event>> = server
+        .iter()
+        .map(|ns| {
+            async {
+                Event::Query(Box::new(
+                    per_nameserver_lookup_ip(ns, name.clone(), options).await,
+                ))
+            }
+            .boxed()
+        })
+        .collect();
 
-    let selected_ip = match response_strategy {
-        FirstPing => {
-            let mut ping_tasks = vec![];
-            let mut fastest_ip = None;
-            loop {
-                let (ping_res, query_res) = match (query_tasks.len(), ping_tasks.len()) {
-                    (0, 0) => break,
-                    (0, _) => {
-                        let (fastest_ip, _, rest) = select_all(ping_tasks).await;
-                        ping_tasks = rest;
-                        (fastest_ip, None)
-                    }
-                    (_, 0) => {
-                        let (res, _idx, rest) = select_all(query_tasks).await;
-                        query_tasks = rest;
-                        (None, Some(res))
-                    }
-                    _ => {
-                        let a = select_all(ping_tasks);
-                        let b = select_all(query_tasks);
-                        let c = select(a, b).await;
-                        match c {
-                            Either::Left(((fastest_ip, _, rest), other)) => {
-                                ping_tasks = rest;
-                                query_tasks = other.into_inner();
-                                (fastest_ip, None)
-                            }
-                            Either::Right(((res, _, rest), other)) => {
-                                query_tasks = rest;
-                                ping_tasks = other.into_inner();
-                                (None, Some(res))
-                            }
-                        }
-                    }
-                };
+    let mut ok_tasks: Vec<DnsResponse> = vec![];
+    let mut err_tasks: Vec<DnsError> = vec![];
+    let mut fastest_ip: Option<IpAddr> = None;
 
-                if let Some(ip) = ping_res {
-                    fastest_ip = Some(ip);
-                    break;
-                }
-
-                match query_res {
-                    Some(v) => match v {
-                        Ok(lookup) => {
-                            let ip_addrs = lookup.ip_addrs();
-                            if ip_addrs.len() == 1 {
-                                return Ok(lookup);
-                            }
-                            ok_tasks.push(lookup);
-                            ping_tasks.push(
+    while let Some(event) = events.next().await {
+        match event {
+            Event::Ping(ip) => {
+                fastest_ip = ip;
+                break; // ping 一旦返回，立即结束
+            }
+            Event::Query(res) => match *res {
+                Ok(lookup) => {
+                    let ip_addrs = lookup.ip_addrs();
+                    if ip_addrs.len() == 1 {
+                        return IpStrategyResult::DirectResponse(Box::new(lookup));
+                    }
+                    ok_tasks.push(lookup);
+                    // 该 nameserver 返回多个 IP，发起 ping 测速
+                    events.push(
+                        async move {
+                            Event::Ping(
                                 multi_mode_ping_fastest(
                                     name.clone(),
                                     ip_addrs,
                                     speed_check_mode.to_vec(),
                                 )
-                                .boxed(),
-                            );
+                                .await,
+                            )
                         }
-                        Err(err) => {
-                            err_tasks.push(err);
-                        }
-                    },
-                    None => break,
-                }
-            }
-
-            match fastest_ip {
-                Some(ip) => Some(ip),
-                None => {
-                    let ip_addr_stats = ok_tasks.iter().flat_map(|r| r.ip_addrs()).fold(
-                        HashMap::<IpAddr, usize>::new(),
-                        |mut map, ip| {
-                            map.entry(ip).and_modify(|n| *n += 1).or_insert(1);
-                            map
-                        },
+                        .boxed(),
                     );
-                    ip_addr_stats
-                        .into_iter()
-                        .max_by_key(|(_, n)| *n)
-                        .map(|(ip, _)| ip)
                 }
-            }
+                Err(err) => {
+                    err_tasks.push(err);
+                }
+            },
         }
-        FastestIp => {
-            let mut ping_tasks = vec![];
+    }
 
-            let mut ip_addr_stats = HashMap::new();
+    if let Some(ip) = fastest_ip {
+        IpStrategyResult::SelectedIp(ip, ok_tasks, err_tasks)
+    } else {
+        // 无 ping 结果，选出现次数最多的 IP
+        let ip = most_frequent_ip(&ok_tasks);
+        match ip {
+            Some(ip) => IpStrategyResult::SelectedIp(ip, ok_tasks, err_tasks),
+            None => IpStrategyResult::Fallback(ok_tasks, err_tasks),
+        }
+    }
+}
 
-            let mut fastest_ip: Option<PingOutput> = None;
+/// FastestIp 策略: 所有查询完成后选 ping 最快的 IP
+async fn lookup_ip_fastest_ip(
+    server: &NameServerGroup,
+    name: &Name,
+    options: &LookupIpOptions,
+    speed_check_mode: &[SpeedCheckMode],
+) -> IpStrategyResult {
+    enum Event {
+        Ping(Result<PingOutput, PingError>),
+        Query(Box<Result<DnsResponse, LookupError>>),
+    }
 
-            loop {
-                #[allow(clippy::type_complexity)]
-                let (ping_res, query_res): (
-                    Option<Result<PingOutput, PingError>>,
-                    Option<Result<DnsResponse, DnsError>>,
-                ) = match (query_tasks.len(), ping_tasks.len()) {
-                    (0, 0) => break,
-                    (0, _) => {
-                        let (res, _idx, rest) = select_all(ping_tasks).await;
-                        ping_tasks = rest;
-                        (Some(res), None)
-                    }
-                    (_, 0) => {
-                        let (res, _idx, rest) = select_all(query_tasks).await;
-                        query_tasks = rest;
-                        (None, Some(res))
-                    }
-                    _ => {
-                        let a = select_all(ping_tasks);
-                        let b = select_all(query_tasks);
-                        let c = select(a, b).await;
-                        match c {
-                            Either::Left(((res, _, rest), other)) => {
-                                ping_tasks = rest;
-                                query_tasks = other.into_inner();
-                                (Some(res), None)
-                            }
-                            Either::Right(((res, _, rest), other)) => {
-                                query_tasks = rest;
-                                ping_tasks = other.into_inner();
-                                (None, Some(res))
-                            }
-                        }
-                    }
-                };
+    let mut events: FuturesUnordered<BoxFuture<'_, Event>> = server
+        .iter()
+        .map(|ns| {
+            async {
+                Event::Query(Box::new(
+                    per_nameserver_lookup_ip(ns, name.clone(), options).await,
+                ))
+            }
+            .boxed()
+        })
+        .collect();
 
-                if let Some(Ok(out)) = ping_res
+    let mut ok_tasks: Vec<DnsResponse> = vec![];
+    let mut err_tasks: Vec<DnsError> = vec![];
+    let mut ip_addr_stats: HashMap<IpAddr, u8> = HashMap::new();
+    let mut fastest_ip: Option<PingOutput> = None;
+
+    while let Some(event) = events.next().await {
+        match event {
+            Event::Ping(res) => {
+                if let Ok(out) = res
                     && match fastest_ip.as_ref() {
                         Some(t) => out.elapsed() < t.elapsed(),
-                        None => {
-                            // first get speed, add timeout
-                            query_tasks = query_tasks
-                                .into_iter()
-                                .map(|q| {
-                                    async {
-                                        match q.timeout(Duration::from_millis(200)).await {
-                                            Ok(t) => t,
-                                            Err(_) => Err(ProtoErrorKind::Timeout.into()),
-                                        }
-                                    }
-                                    .boxed()
-                                })
-                                .collect();
-
-                            true
-                        }
+                        None => true,
                     }
                 {
                     fastest_ip = Some(out);
                 }
-
-                if let Some(res) = query_res {
-                    match res {
-                        Ok(lookup) => {
-                            let ip_addrs = lookup.ip_addrs();
-
-                            for ip_addr in &ip_addrs {
-                                *ip_addr_stats.entry(*ip_addr).or_insert_with(|| {
-                                    ping_tasks.push(
+            }
+            Event::Query(res) => match *res {
+                Ok(lookup) => {
+                    let ip_addrs = lookup.ip_addrs();
+                    for &ip_addr in &ip_addrs {
+                        *ip_addr_stats.entry(ip_addr).or_insert_with(|| {
+                            events.push(
+                                async move {
+                                    Event::Ping(
                                         multi_mode_ping(
                                             name.clone(),
-                                            *ip_addr,
+                                            ip_addr,
                                             speed_check_mode.to_vec(),
                                         )
-                                        .boxed(),
-                                    );
-                                    0u8
-                                }) += 1;
-                            }
-                            ok_tasks.push(lookup);
-                        }
-                        Err(err) => {
-                            err_tasks.push(err);
-                        }
+                                        .await,
+                                    )
+                                }
+                                .boxed(),
+                            );
+                            0u8
+                        }) += 1;
                     }
+                    ok_tasks.push(lookup);
                 }
-            }
-
-            match fastest_ip {
-                Some(fastest_ip) => Some(fastest_ip.dest().ip_addr()),
-                None => ip_addr_stats
-                    .into_iter()
-                    .max_by_key(|(_, n)| *n)
-                    .map(|(ip, _)| ip),
-            }
+                Err(err) => {
+                    err_tasks.push(err);
+                }
+            },
         }
-        FastestResponse => {
-            let mut last_error = None;
-            loop {
-                let (res, _idx, rest) = select_all(query_tasks).await;
-                if let Ok(response) = &res
-                    && response.response_code() == ResponseCode::NoError
-                {
-                    return res;
-                }
-
-                if rest.is_empty() {
-                    return res;
-                }
-
-                #[allow(clippy::collapsible_if)]
-                if let Err(err) = &res {
-                    if matches!(last_error, Some(ref e) if e == err) {
-                        return res;
-                    }
-                    last_error = Some(err.clone());
-                }
-                query_tasks = rest;
-            }
-        }
-    };
-
-    if let Some(selected_ip) = selected_ip {
-        for mut res in ok_tasks {
-            let record = res
-                .take_answers()
-                .into_iter()
-                .find(|r| matches!(r.data().ip_addr(), Some(ip) if ip == selected_ip));
-            if let Some(record) = record {
-                res.add_answer(record);
-                return Ok(res);
-            }
-        }
-        unreachable!()
     }
 
-    match ok_tasks.into_iter().next() {
-        Some(lookup) => Ok(lookup),
-        None => match err_tasks.into_iter().next() {
-            Some(err) => Err(err),
-            None => unreachable!(),
-        },
+    if let Some(fastest) = fastest_ip {
+        IpStrategyResult::SelectedIp(fastest.dest().ip_addr(), ok_tasks, err_tasks)
+    } else {
+        let ip = most_frequent_ip(&ok_tasks);
+        match ip {
+            Some(ip) => IpStrategyResult::SelectedIp(ip, ok_tasks, err_tasks),
+            None => IpStrategyResult::Fallback(ok_tasks, err_tasks),
+        }
     }
+}
+
+/// FastestResponse 策略: 返回第一个 NoError 响应，全失败则返回第一个错误
+async fn lookup_ip_fastest_response(
+    server: &NameServerGroup,
+    name: &Name,
+    options: &LookupIpOptions,
+) -> IpStrategyResult {
+    let mut events: FuturesUnordered<BoxFuture<'_, Result<DnsResponse, LookupError>>> = server
+        .iter()
+        .map(|ns| {
+            async { per_nameserver_lookup_ip(ns, name.clone(), options).await }.boxed()
+        })
+        .collect();
+
+    let mut last_error = None;
+
+    while let Some(res) = events.next().await {
+        match &res {
+            Ok(response) if response.response_code() == ResponseCode::NoError => {
+                return IpStrategyResult::DirectResponse(Box::new(res.unwrap()));
+            }
+            _ => {}
+        }
+
+        if events.is_empty() {
+            return match res {
+                Ok(r) => IpStrategyResult::DirectResponse(Box::new(r)),
+                Err(e) => IpStrategyResult::Error(e),
+            };
+        }
+
+        if let Err(ref err) = res {
+            if matches!(last_error, Some(ref e) if e == err) {
+                return IpStrategyResult::Error(res.unwrap_err());
+            }
+            last_error = Some(err.clone());
+        }
+    }
+
+    match last_error {
+        Some(err) => IpStrategyResult::Error(err),
+        None => IpStrategyResult::Error(ProtoErrorKind::NoConnections.into()),
+    }
+}
+
+/// 从 DNS 响应列表中找出出现次数最多的 IP 地址
+fn most_frequent_ip(ok_tasks: &[DnsResponse]) -> Option<IpAddr> {
+    ok_tasks
+        .iter()
+        .flat_map(|r| r.ip_addrs())
+        .fold(HashMap::<IpAddr, usize>::new(), |mut map, ip| {
+            map.entry(ip).and_modify(|n| *n += 1).or_insert(1);
+            map
+        })
+        .into_iter()
+        .max_by_key(|(_, n)| *n)
+        .map(|(ip, _)| ip)
 }
 
 async fn multi_mode_ping_fastest(
