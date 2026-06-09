@@ -214,6 +214,25 @@ impl DnsCacheMiddleware {
             }
         });
     }
+
+    /// 尝试将查询加入预取队列，用于后台刷新缓存
+    fn try_prefetch(&self, query: &Query, server_group_name: &str) {
+        if let Some(sender) = self.prefetch_sender.as_ref() {
+            let query_name = query.name().to_string();
+            match sender.try_send(PrefetchTask {
+                query: query.clone(),
+                rule_group: Some(server_group_name.to_string()),
+            }) {
+                Ok(_) => debug!("[cache] bg-refresh queued: {}", query_name),
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    debug!("[cache] queue full, drop bg-refresh: {}", query_name);
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    error!("[cache] prefetch channel closed");
+                }
+            }
+        }
+    }
 }
 
 pub async fn prefetch_worker(mut receiver: mpsc::Receiver<PrefetchTask>, client: DnsHandle) {
@@ -299,25 +318,7 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
                 Some((res, status)) if res.name_server_group() == Some(ctx.server_group_name()) => {
                     match status {
                         CacheStatus::Valid => {
-                            // background refresh via prefetch queue
-                            if let Some(sender) = self.prefetch_sender.as_ref() {
-                                let query_name = query.name().to_string();
-                                match sender.try_send(PrefetchTask {
-                                    query: query.clone(),
-                                    rule_group: Some(ctx.server_group_name().to_string()),
-                                }) {
-                                    Ok(_) => debug!("[cache] bg-refresh queued: {}", query_name),
-                                    Err(mpsc::error::TrySendError::Full(_)) => {
-                                        debug!(
-                                            "[cache] queue full, drop bg-refresh: {}",
-                                            query_name
-                                        );
-                                    }
-                                    Err(mpsc::error::TrySendError::Closed(_)) => {
-                                        error!("[cache] prefetch channel closed");
-                                    }
-                                }
-                            }
+                            self.try_prefetch(&query, ctx.server_group_name());
 
                             debug!(
                                 "[cache] hit: {} {} (valid)",
@@ -332,25 +333,7 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
                             return Ok(res);
                         }
                         CacheStatus::Expired if ctx.cfg().serve_expired() && !no_serve_expired => {
-                            // background refresh via prefetch queue
-                            if let Some(sender) = self.prefetch_sender.as_ref() {
-                                let query_name = query.name().to_string();
-                                match sender.try_send(PrefetchTask {
-                                    query: query.clone(),
-                                    rule_group: Some(ctx.server_group_name().to_string()),
-                                }) {
-                                    Ok(_) => debug!("[cache] bg-refresh queued: {}", query_name),
-                                    Err(mpsc::error::TrySendError::Full(_)) => {
-                                        debug!(
-                                            "[cache] queue full, drop bg-refresh: {}",
-                                            query_name
-                                        );
-                                    }
-                                    Err(mpsc::error::TrySendError::Closed(_)) => {
-                                        error!("[cache] prefetch channel closed");
-                                    }
-                                }
-                            }
+                            self.try_prefetch(&query, ctx.server_group_name());
 
                             debug!(
                                 "[cache] hit: {} {} (expired, serve-stale)",

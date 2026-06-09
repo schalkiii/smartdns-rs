@@ -74,7 +74,7 @@ impl DnsMiddlewareHandler {
 
         server_opts.rule_group = rule_group_name.map(|s| s.to_string());
 
-        let mut ctx = DnsContext::new(req.query().name().borrow(), cfg, server_opts.clone());
+        let mut ctx = DnsContext::new(req.query().name().borrow(), cfg, server_opts);
         self.host.execute(&mut ctx, req).await
     }
 

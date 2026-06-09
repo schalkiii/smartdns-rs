@@ -3,8 +3,6 @@ use crate::middleware::*;
 use ipnet::Ipv6Net;
 use std::net::IpAddr;
 use std::net::{Ipv4Addr, Ipv6Addr};
-use std::ops::Deref;
-
 pub struct Dns64Middleware {
     ipv6_net: Ipv6Net,
 }
@@ -33,11 +31,19 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for Dns64Middlewa
                     return res;
                 };
 
-                let mut msg: op::Message = req.deref().clone();
-                let Some(q) = msg.queries_mut().first_mut() else {
-                    return Err(err);
-                };
-                q.set_query_type(RecordType::A);
+                // 构建最小化查询消息：仅保留查询名称（类型改为 A）和 EDNS 扩展
+                // 避免完整 Message 克隆，NS 中间件会从零构建上游消息
+                let mut msg = op::Message::query();
+                {
+                    let mut q = query.clone();
+                    q.set_query_type(RecordType::A);
+                    msg.add_query(q);
+                }
+                if let Some(edns) = req.extensions() {
+                    msg.extensions_mut()
+                        .get_or_insert_with(op::Edns::new)
+                        .clone_from(edns);
+                }
 
                 let req = DnsRequest::new(msg, req.src(), req.protocol());
 
