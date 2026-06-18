@@ -518,10 +518,13 @@ async fn socket_rate_limit() {
 }
 
 /// 检测是否为 OS 资源耗尽错误 (WSAENOBUFS on Windows, ENOBUFS on Linux)
+/// 同时匹配错误消息文本，防止因错误码包装不一致导致漏检。
 fn is_resource_busy(err: &io::Error) -> bool {
     // Windows: WSAENOBUFS = 10055
     // Linux: ENOBUFS = 105
-    err.raw_os_error() == Some(10055) || err.raw_os_error() == Some(105)
+    err.raw_os_error() == Some(10055)
+        || err.raw_os_error() == Some(105)
+        || err.to_string().contains("resource too busy")
 }
 
 #[derive(Clone, Default)]

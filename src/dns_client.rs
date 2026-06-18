@@ -3,10 +3,11 @@ use std::{
     ops::Deref,
     path::PathBuf,
     slice::Iter,
-    sync::Arc,
+    sync::{Arc, OnceLock},
+    time::Duration,
 };
 
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, Semaphore};
 
 use crate::third_ext::FutureJoinAllExt;
 use crate::{
@@ -20,7 +21,7 @@ use crate::{
 
 use crate::libdns::{
     proto::{
-        DnsHandle, ProtoError,
+        DnsHandle, ProtoError, ProtoErrorKind,
         op::{Edns, Message, Query},
         rr::{
             Record, RecordType,
@@ -38,6 +39,35 @@ pub use name_server_group::NameServerGroup;
 /// Maximum TTL as defined in https://tools.ietf.org/html/rfc2181, 2147483647
 ///   Setting this to a value of 1 day, in seconds
 pub const MAX_TTL: u32 = 86400_u32;
+
+/// 全局 DNS 查询并发限制器，防止 DnsMultiplexer 过载。
+///
+/// hickory-proto 的 DnsMultiplexer 在活跃请求超过 CHANNEL_BUFFER_SIZE(32) 时
+/// 返回 ProtoErrorKind::Busy("resource too busy")。通过限制全局并发查询数，
+/// 避免大量请求同时涌入单个复用器导致频繁拒绝。
+/// 并发数设为 32，与复用器缓冲区大小对齐，在性能和资源安全之间取得平衡。
+static DNS_QUERY_SEMAPHORE: OnceLock<Arc<Semaphore>> = OnceLock::new();
+
+fn dns_query_semaphore() -> Arc<Semaphore> {
+    DNS_QUERY_SEMAPHORE
+        .get_or_init(|| Arc::new(Semaphore::new(32)))
+        .clone()
+}
+
+/// 检测 ProtoError 是否为资源繁忙错误（ProtoErrorKind::Busy）
+/// 同时检测 IO 错误中的 OS 资源耗尽码，作为兜底。
+fn is_proto_busy(err: &ProtoError) -> bool {
+    if err.is_busy() {
+        return true;
+    }
+    // 兜底：检查 IO 错误中的 OS 资源耗尽码
+    if let ProtoErrorKind::Io(io_err) = err.kind() {
+        return io_err.raw_os_error() == Some(10055)
+            || io_err.raw_os_error() == Some(105)
+            || io_err.to_string().contains("resource too busy");
+    }
+    false
+}
 
 #[derive(Default)]
 pub struct DnsClientBuilder {
@@ -554,12 +584,36 @@ mod name_server {
                 request_options,
             );
 
-            let res = {
-                let ns = &self.connection;
-                ns.send(req).first_answer().await?
-            };
+            // 全局 DNS 查询并发限制：防止 DnsMultiplexer 过载导致 Busy 错误。
+            // 在 semaphore 保护下执行查询，超出并发上限时自动排队等待。
+            let semaphore = dns_query_semaphore();
+            let mut retries = 5u32;
+            let mut backoff_ms = 50u64;
 
-            Ok(From::<Message>::from(res.into()))
+            loop {
+                let _permit = semaphore.acquire().await;
+                let res = {
+                    let ns = &self.connection;
+                    ns.send(req.clone()).first_answer().await
+                };
+
+                match res {
+                    Ok(response) => return Ok(From::<Message>::from(response.into())),
+                    Err(err) if is_proto_busy(&err) && retries > 0 => {
+                        retries -= 1;
+                        log::debug!(
+                            "[ns] lookup busy, retries left: {}, waiting {}ms for multiplexer to drain",
+                            retries, backoff_ms,
+                        );
+                        // 释放信号量，让其他请求有机会完成，排空复用器缓冲区
+                        drop(_permit);
+                        tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                        // 指数退避：50ms → 100ms → 200ms → 400ms → 800ms，最大 1 秒
+                        backoff_ms = (backoff_ms * 2).min(1000);
+                    }
+                    Err(err) => return Err(err.into()),
+                }
+            }
         }
     }
 
