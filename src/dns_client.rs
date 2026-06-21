@@ -45,21 +45,33 @@ pub const MAX_TTL: u32 = 86400_u32;
 /// hickory-proto 的 DnsMultiplexer 在活跃请求超过 CHANNEL_BUFFER_SIZE(32) 时
 /// 返回 ProtoErrorKind::Busy("resource too busy")。通过限制全局并发查询数，
 /// 避免大量请求同时涌入单个复用器导致频繁拒绝。
-/// 并发数设为 32，与复用器缓冲区大小对齐，在性能和资源安全之间取得平衡。
+/// 并发数设为 24（低于 CHANNEL_BUFFER_SIZE 的 32），留出 8 个槽位余量，
+/// 确保复用器缓冲区始终有空位，避免 busy 重试死循环。
 static DNS_QUERY_SEMAPHORE: OnceLock<Arc<Semaphore>> = OnceLock::new();
 
 fn dns_query_semaphore() -> Arc<Semaphore> {
     DNS_QUERY_SEMAPHORE
-        .get_or_init(|| Arc::new(Semaphore::new(32)))
+        .get_or_init(|| Arc::new(Semaphore::new(24)))
         .clone()
 }
 
-/// 检测 ProtoError 是否为资源繁忙错误（ProtoErrorKind::Busy）
-/// 同时检测 IO 错误中的 OS 资源耗尽码，作为兜底。
-fn is_proto_busy(err: &ProtoError) -> bool {
+/// 检测 ProtoError 是否可重试（连接断开、资源繁忙等临时性错误）。
+///
+/// 可重试的错误类型：
+/// - ProtoErrorKind::Busy: DnsMultiplexer 缓冲区满
+/// - "receiver was canceled": 连接断开导致所有待处理请求被取消
+/// - IO 错误中的 OS 资源耗尽码 (WSAENOBUFS/ENOBUFS)
+fn is_retryable(err: &ProtoError) -> bool {
     if err.is_busy() {
         return true;
     }
+
+    // 连接断开时，hickory-proto 的 DnsExchangeSend 返回此错误。
+    // 重试时 NameServer::connected_mut_client 会创建新连接，可正常恢复。
+    if err.to_string().contains("receiver was canceled") {
+        return true;
+    }
+
     // 兜底：检查 IO 错误中的 OS 资源耗尽码
     if let ProtoErrorKind::Io(io_err) = err.kind() {
         return io_err.raw_os_error() == Some(10055)
@@ -599,14 +611,14 @@ mod name_server {
 
                 match res {
                     Ok(response) => return Ok(From::<Message>::from(response.into())),
-                    Err(err) if is_proto_busy(&err) && retries > 0 => {
+                    Err(err) if is_retryable(&err) && retries > 0 => {
                         retries -= 1;
                         log::debug!(
-                            "[ns] lookup busy, retries left: {}, waiting {}ms for multiplexer to drain",
+                            "[ns] lookup retryable error: {err}, retries left: {}, waiting {}ms",
                             retries, backoff_ms,
                         );
-                        // 释放信号量，让其他请求有机会完成，排空复用器缓冲区
-                        drop(_permit);
+                        // 持 permit 等待：阻止新请求涌入，让复用器排空或连接重建。
+                        // 不丢 permit，防止其他请求立即填补空位导致 busy 死循环。
                         tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
                         // 指数退避：50ms → 100ms → 200ms → 400ms → 800ms，最大 1 秒
                         backoff_ms = (backoff_ms * 2).min(1000);
