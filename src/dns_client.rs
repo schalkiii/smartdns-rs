@@ -3,7 +3,7 @@ use std::{
     ops::Deref,
     path::PathBuf,
     slice::Iter,
-    sync::{Arc, OnceLock},
+    sync::Arc,
     time::Duration,
 };
 
@@ -40,20 +40,23 @@ pub use name_server_group::NameServerGroup;
 ///   Setting this to a value of 1 day, in seconds
 pub const MAX_TTL: u32 = 86400_u32;
 
-/// 全局 DNS 查询并发限制器，防止 DnsMultiplexer 过载。
+/// 单个 NameServer 的并发查询限制器。
 ///
 /// hickory-proto 的 DnsMultiplexer 在活跃请求超过 CHANNEL_BUFFER_SIZE(32) 时
-/// 返回 ProtoErrorKind::Busy("resource too busy")。通过限制全局并发查询数，
-/// 避免大量请求同时涌入单个复用器导致频繁拒绝。
-/// 并发数设为 24（低于 CHANNEL_BUFFER_SIZE 的 32），留出 8 个槽位余量，
-/// 确保复用器缓冲区始终有空位，避免 busy 重试死循环。
-static DNS_QUERY_SEMAPHORE: OnceLock<Arc<Semaphore>> = OnceLock::new();
-
-fn dns_query_semaphore() -> Arc<Semaphore> {
-    DNS_QUERY_SEMAPHORE
-        .get_or_init(|| Arc::new(Semaphore::new(24)))
-        .clone()
-}
+/// 返回 ProtoErrorKind::Busy("resource too busy")。
+///
+/// 之前的全局信号量方案存在问题：当 NameServerGroup 同时查询 N 个上游服务器时，
+/// 第一个返回后会 cancel 其余 N-1 个查询，这些被 cancel 的请求在 DnsMultiplexer
+/// 中变成僵尸请求（直到 poll_next 时才被 drop_cancelled 清理）。僵尸请求堆积导致
+/// active_requests.len() 虚高，新请求遇到 Busy。
+///
+/// 改为 per-NameServer 信号量后，每个服务器独立限制并发请求数。即使有僵尸请求，
+/// 也只影响单个服务器的 DnsMultiplexer，不会连锁影响其他服务器。
+///
+/// 并发数设为 16，配合 8 个上游服务器：
+/// - 每个服务器 active_requests = 16（活跃）+ 14（僵尸）= 30 < 32 ✓
+/// - 全局并发用户查询 = 16（不受服务器数量限制）
+const PER_NAMESERVER_CONCURRENCY: usize = 16;
 
 /// 检测 ProtoError 是否可重试（连接断开、资源繁忙等临时性错误）。
 ///
@@ -472,6 +475,8 @@ mod name_server {
     pub struct NameServer {
         options: Arc<NameServerOpts>,
         connection: Connection,
+        // per-NameServer 并发限制器，防止 DnsMultiplexer 过载
+        semaphore: Arc<Semaphore>,
     }
 
     impl NameServer {
@@ -539,6 +544,7 @@ mod name_server {
             Ok(Self {
                 options: options.into(),
                 connection,
+                semaphore: Arc::new(Semaphore::new(PER_NAMESERVER_CONCURRENCY)),
             })
         }
 
@@ -596,9 +602,10 @@ mod name_server {
                 request_options,
             );
 
-            // 全局 DNS 查询并发限制：防止 DnsMultiplexer 过载导致 Busy 错误。
-            // 在 semaphore 保护下执行查询，超出并发上限时自动排队等待。
-            let semaphore = dns_query_semaphore();
+            // per-NameServer 并发限制：防止单个服务器的 DnsMultiplexer 过载。
+            // 每个服务器独立限制并发，避免 NameServerGroup cancel 产生的僵尸请求
+            // 连锁影响其他服务器。
+            let semaphore = self.semaphore.clone();
             let mut retries = 5u32;
             let mut backoff_ms = 50u64;
 
