@@ -53,10 +53,11 @@ pub const MAX_TTL: u32 = 86400_u32;
 /// 改为 per-NameServer 信号量后，每个服务器独立限制并发请求数。即使有僵尸请求，
 /// 也只影响单个服务器的 DnsMultiplexer，不会连锁影响其他服务器。
 ///
-/// 并发数设为 16，配合 8 个上游服务器：
-/// - 每个服务器 active_requests = 16（活跃）+ 14（僵尸）= 30 < 32 ✓
-/// - 全局并发用户查询 = 16（不受服务器数量限制）
-const PER_NAMESERVER_CONCURRENCY: usize = 16;
+/// 并发数设为 8，留出 24 个槽位容纳僵尸请求：
+/// - 每个服务器 active_requests = 8（活跃）+ 24（僵尸）= 32 ≤ CHANNEL_BUFFER_SIZE
+/// - 22 小时实测：per-NameServer=16 时 busy 7532 次，降至 8 可进一步减少
+/// - 8 个并发槽位足够个人电脑场景使用
+const PER_NAMESERVER_CONCURRENCY: usize = 8;
 
 /// 检测 ProtoError 是否可重试（连接断开、资源繁忙等临时性错误）。
 ///
