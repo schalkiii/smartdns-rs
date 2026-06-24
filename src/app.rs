@@ -523,7 +523,7 @@ async fn process(
                                 match res {
                                     Ok(lookup) => {
                                         let record_count = lookup.record_iter().count();
-                                        let from_cache = lookup.from_cache();
+                                        let from_cache = lookup.is_from_cache();
                                         log::debug!(
                                             "[qid={}] {}done: {} {} -> {} record(s), {:?}",
                                             qid,

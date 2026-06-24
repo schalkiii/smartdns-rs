@@ -512,7 +512,7 @@ mod response {
         }
 
         /// 返回此响应是否来自缓存命中
-        pub fn from_cache(&self) -> bool {
+        pub fn is_from_cache(&self) -> bool {
             self.from_cache
         }
 
