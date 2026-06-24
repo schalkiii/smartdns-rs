@@ -149,6 +149,10 @@ function OverviewTab() {
     stats != null ? `${stats.cache_hit_rate.toFixed(1)}%` : "—";
   const avgTimeValue =
     stats != null ? `${stats.avg_query_time_ms.toFixed(1)} ms` : "—";
+  const cacheHitAvgTimeValue =
+    stats != null ? `${stats.cache_hit_avg_query_time_ms.toFixed(1)} ms` : "—";
+  const cacheMissAvgTimeValue =
+    stats != null ? `${stats.cache_miss_avg_query_time_ms.toFixed(1)} ms` : "—";
   const bgAvgTimeValue =
     stats != null ? `${stats.bg_avg_query_time_ms.toFixed(1)} ms` : "—";
 
@@ -273,8 +277,9 @@ function OverviewTab() {
             <Alert severity="error">加载失败</Alert>
           ) : (
             <MetricCard
-              title="平均查询时间"
+              title="综合平均查询时间"
               value={avgTimeValue}
+              subtitle={`${stats!.cache_hit_queries.toLocaleString()} 命中 + ${stats!.cache_miss_queries.toLocaleString()} 未命中`}
               icon={<SpeedIcon />}
               color="#ffa726"
             />
@@ -287,11 +292,41 @@ function OverviewTab() {
             <Alert severity="error">加载失败</Alert>
           ) : (
             <MetricCard
-              title="后台查询耗时"
+              title="缓存命中耗时"
+              value={cacheHitAvgTimeValue}
+              subtitle={`${stats!.cache_hit_queries.toLocaleString()} 次命中`}
+              icon={<CachedIcon />}
+              color="#66bb6a"
+            />
+          )}
+        </Grid>
+        <Grid size={{ xs: 12, sm: 6, lg: 4 }}>
+          {statsLoading ? (
+            <MetricCardSkeleton />
+          ) : statsError ? (
+            <Alert severity="error">加载失败</Alert>
+          ) : (
+            <MetricCard
+              title="上游查询耗时"
+              value={cacheMissAvgTimeValue}
+              subtitle={`${stats!.cache_miss_queries.toLocaleString()} 次未命中`}
+              icon={<DnsIcon />}
+              color="#ef5350"
+            />
+          )}
+        </Grid>
+        <Grid size={{ xs: 12, sm: 6, lg: 4 }}>
+          {statsLoading ? (
+            <MetricCardSkeleton />
+          ) : statsError ? (
+            <Alert severity="error">加载失败</Alert>
+          ) : (
+            <MetricCard
+              title="后台预取耗时"
               value={bgAvgTimeValue}
               subtitle="缓存预取平均耗时"
               icon={<TimerIcon />}
-              color="#66bb6a"
+              color="#7e57c2"
             />
           )}
         </Grid>

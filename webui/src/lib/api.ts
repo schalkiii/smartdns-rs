@@ -54,6 +54,10 @@ export interface StatsResponse {
   bg_total_queries: number;
   cache_hit_rate: number;
   avg_query_time_ms: number;
+  cache_hit_avg_query_time_ms: number;
+  cache_miss_avg_query_time_ms: number;
+  cache_hit_queries: number;
+  cache_miss_queries: number;
   bg_avg_query_time_ms: number;
   version: string;
   history: StatsSnapshot[];

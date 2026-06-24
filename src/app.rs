@@ -54,6 +54,10 @@ impl App {
                     active_queries: Default::default(),
                     total_queries: AtomicU64::new(0),
                     total_query_time_ns: AtomicU64::new(0),
+                    cache_hit_queries: AtomicU64::new(0),
+                    cache_hit_query_time_ns: AtomicU64::new(0),
+                    cache_miss_queries: AtomicU64::new(0),
+                    cache_miss_query_time_ns: AtomicU64::new(0),
                     bg_total_queries: AtomicU64::new(0),
                     bg_total_query_time_ns: AtomicU64::new(0),
                     stats_history: Mutex::const_new(Vec::new()),
@@ -109,6 +113,36 @@ impl App {
         }
         let time_ns = self.total_query_time_ns.load(Ordering::Relaxed);
         time_ns as f64 / total as f64 / 1_000_000.0
+    }
+
+    /// 缓存命中查询的平均耗时（毫秒）
+    pub fn cache_hit_avg_query_time_ms(&self) -> f64 {
+        let hits = self.cache_hit_queries.load(Ordering::Relaxed);
+        if hits == 0 {
+            return 0.0;
+        }
+        let time_ns = self.cache_hit_query_time_ns.load(Ordering::Relaxed);
+        time_ns as f64 / hits as f64 / 1_000_000.0
+    }
+
+    /// 缓存未命中查询的平均耗时（毫秒），反映真实上游查询性能
+    pub fn cache_miss_avg_query_time_ms(&self) -> f64 {
+        let misses = self.cache_miss_queries.load(Ordering::Relaxed);
+        if misses == 0 {
+            return 0.0;
+        }
+        let time_ns = self.cache_miss_query_time_ns.load(Ordering::Relaxed);
+        time_ns as f64 / misses as f64 / 1_000_000.0
+    }
+
+    /// 缓存命中查询总数
+    pub fn cache_hit_queries(&self) -> u64 {
+        self.cache_hit_queries.load(Ordering::Relaxed)
+    }
+
+    /// 缓存未命中查询总数
+    pub fn cache_miss_queries(&self) -> u64 {
+        self.cache_miss_queries.load(Ordering::Relaxed)
     }
 
     pub fn bg_total_queries(&self) -> u64 {
@@ -260,6 +294,10 @@ pub struct AppState {
     active_queries: AtomicUsize,
     total_queries: AtomicU64,
     total_query_time_ns: AtomicU64,
+    cache_hit_queries: AtomicU64,
+    cache_hit_query_time_ns: AtomicU64,
+    cache_miss_queries: AtomicU64,
+    cache_miss_query_time_ns: AtomicU64,
     bg_total_queries: AtomicU64,
     bg_total_query_time_ns: AtomicU64,
     stats_history: Mutex<Vec<StatsSnapshot>>,
@@ -350,7 +388,7 @@ pub fn serve(cfg: Arc<RuntimeConfig>) {
                         let app = app.clone();
                         bg_batch.push(async move {
                             let start = Instant::now();
-                            let result = process(handler, message, server_opts).await;
+                            let (result, _from_cache) = process(handler, message, server_opts).await;
                             app.bg_total_query_time_ns
                                 .fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
                             let _ = sender.send(result);
@@ -359,9 +397,19 @@ pub fn serve(cfg: Arc<RuntimeConfig>) {
                         last_activity = Instant::now();
                         batch.push(async move {
                             let start = Instant::now();
-                            let result = process(handler, message, server_opts).await;
+                            let (result, from_cache) = process(handler, message, server_opts).await;
+                            let elapsed_ns = start.elapsed().as_nanos() as u64;
                             app.total_query_time_ns
-                                .fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                                .fetch_add(elapsed_ns, Ordering::Relaxed);
+                            if from_cache {
+                                app.cache_hit_queries.fetch_add(1, Ordering::Relaxed);
+                                app.cache_hit_query_time_ns
+                                    .fetch_add(elapsed_ns, Ordering::Relaxed);
+                            } else {
+                                app.cache_miss_queries.fetch_add(1, Ordering::Relaxed);
+                                app.cache_miss_query_time_ns
+                                    .fetch_add(elapsed_ns, Ordering::Relaxed);
+                            }
                             let _ = sender.send(result);
                         });
                     }
@@ -434,7 +482,7 @@ async fn process(
     handler: Arc<DnsMiddlewareHandler>,
     message: SerialMessage,
     server_opts: ServerOpts,
-) -> SerialMessage {
+) -> (SerialMessage, bool) {
     use crate::libdns::proto::ProtoError;
     use crate::libdns::proto::op::{Header, Message, MessageType, OpCode, ResponseCode};
 
@@ -454,7 +502,7 @@ async fn process(
                             response_header.set_recursion_available(true);
                             response_header.set_authoritative(false);
 
-                            let response = {
+                            let (response, from_cache) = {
                                 let start = Instant::now();
                                 let qid = request.id();
                                 let qname = request.query().original().to_string();
@@ -475,6 +523,7 @@ async fn process(
                                 match res {
                                     Ok(lookup) => {
                                         let record_count = lookup.record_iter().count();
+                                        let from_cache = lookup.from_cache();
                                         log::debug!(
                                             "[qid={}] {}done: {} {} -> {} record(s), {:?}",
                                             qid,
@@ -484,7 +533,7 @@ async fn process(
                                             record_count,
                                             start.elapsed()
                                         );
-                                        lookup
+                                        (lookup, from_cache)
                                     }
                                     Err(e) => {
                                         if e.is_nx_domain() {
@@ -501,7 +550,7 @@ async fn process(
                                         }
                                         let original = request.query().original();
                                         match e.as_soa(original) {
-                                            Some(soa) => soa,
+                                            Some(soa) => (soa, false),
                                             None => {
                                                 log::warn!(
                                                     "[qid={}] {}failed: {} {} -> {}, {:?}",
@@ -516,7 +565,7 @@ async fn process(
                                                     .set_response_code(ResponseCode::ServFail);
                                                 let mut res = DnsResponse::empty();
                                                 res.add_query(original.to_owned());
-                                                res
+                                                (res, false)
                                             }
                                         }
                                     }
@@ -526,7 +575,7 @@ async fn process(
                             let response_message: Message =
                                 response.into_message(Some(response_header));
 
-                            SerialMessage::raw(response_message, addr, protocol)
+                            (SerialMessage::raw(response_message, addr, protocol), from_cache)
                         }
                         OpCode::Status => todo!(),
                         OpCode::Notify => todo!(),
@@ -559,9 +608,9 @@ async fn process(
             response_header.set_response_code(ResponseCode::FormErr);
             let mut response_message = Message::query().to_response();
             response_message.set_header(response_header);
-            SerialMessage::raw(response_message, addr, protocol)
+            (SerialMessage::raw(response_message, addr, protocol), false)
         }
-        _ => SerialMessage::raw(Message::query(), addr, protocol),
+        _ => (SerialMessage::raw(Message::query(), addr, protocol), false),
     }
 }
 

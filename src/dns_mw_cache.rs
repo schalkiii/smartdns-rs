@@ -315,7 +315,7 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
 
             match cached_res {
                 // check if it's the same nameserver group.
-                Some((res, status)) if res.name_server_group() == Some(ctx.server_group_name()) => {
+                Some((mut res, status)) if res.name_server_group() == Some(ctx.server_group_name()) => {
                     match status {
                         CacheStatus::Valid => {
                             self.try_prefetch(&query, ctx.server_group_name());
@@ -327,6 +327,7 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
                             );
 
                             ctx.source = LookupFrom::Cache;
+                            res.mark_from_cache();
                             self.cache
                                 .query_hits
                                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -341,6 +342,7 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
                                 query.query_type()
                             );
                             ctx.source = LookupFrom::Cache;
+                            res.mark_from_cache();
                             self.cache
                                 .query_hits
                                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);

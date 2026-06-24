@@ -419,6 +419,8 @@ mod response {
         message: Message,
         valid_until: Instant,
         name_server_group: Option<String>,
+        /// 标记此响应是否来自缓存命中
+        from_cache: bool,
     }
 
     impl PartialEq for DnsResponse {
@@ -464,6 +466,7 @@ mod response {
                 message,
                 valid_until,
                 name_server_group: None,
+                from_cache: false,
             }
         }
 
@@ -472,6 +475,7 @@ mod response {
                 message: Message::query(),
                 valid_until: Instant::now(),
                 name_server_group: None,
+                from_cache: false,
             }
         }
 
@@ -505,6 +509,16 @@ mod response {
         pub fn with_name_server_group(mut self, group_name: String) -> Self {
             self.name_server_group = Some(group_name);
             self
+        }
+
+        /// 返回此响应是否来自缓存命中
+        pub fn from_cache(&self) -> bool {
+            self.from_cache
+        }
+
+        /// 标记此响应来自缓存
+        pub fn mark_from_cache(&mut self) {
+            self.from_cache = true;
         }
 
         pub fn records(&self) -> &[Record] {
@@ -573,6 +587,7 @@ mod response {
                 message,
                 valid_until,
                 name_server_group: None,
+                from_cache: false,
             }
         }
     }
