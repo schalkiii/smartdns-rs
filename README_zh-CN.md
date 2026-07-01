@@ -95,3 +95,27 @@ SmartDNS-rs 🐋 一个是受 [C 语言版 SmartDNS](https://github.com/pymumu/s
 **目前仍在开发中，请勿用于生产环境，欢迎试用并提供反馈。**
 
 请参考 [TODO](https://github.com/mokeyish/smartdns-rs/blob/main/TODO.md) 查看功能覆盖情况。
+
+## 故障排查
+
+### 长时间运行后网络异常（resource too busy）
+
+**症状**：长时间运行后，DNS 查询变慢或失败，日志中频繁出现 `resource too busy` 错误。
+
+**根因**：`NameServerGroup` 并行查询多个上游服务器时，首个成功响应会取消其余查询。这些被取消的查询在 `DnsMultiplexer` 中遗留"僵尸"请求条目，直到上游响应或超时才释放槽位。慢速上游（5s 超时）使僵尸累积并耗尽 32 个槽位缓冲区，导致新查询触发 `Busy` 错误。
+
+**修复（已应用）**：`NameServerGroup` 现在使用 detached task 替代 `FuturesUnordered` 的早期返回。失去竞争的查询在后台自然完成并释放槽位，不再产生僵尸。
+
+**建议的配置调优**：
+- 从配置中移除不可靠的上游服务器（证书过期、频繁超时）——它们是僵尸累积和真实查询失败的主要来源。
+- 若不需要基于 ping 的 IP 选择，使用 `speed-check-mode none` 以减少单次查询开销。
+- 保持较大的 `cache-size`（如 65536）以最大化缓存命中率，降低上游负载。
+
+### 上游 DNS 服务器健康
+
+若日志中出现 `Failed to connect to any nameserver` 错误，请检查所配置上游服务器的健康状况：
+- **证书过期**：移除或更新服务器 URL。
+- **TLS 握手超时**：服务器可能不可达或过载，考虑移除。
+- **请求超时**：网络路径问题。尝试更换服务器或协议（如从 DoH 切换为普通 UDP）。
+
+使用 `log-level debug` 可查看详细的重试与错误信息。

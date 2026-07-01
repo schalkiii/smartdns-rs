@@ -282,6 +282,30 @@ sudo ./target/release/smartdns run -c ./etc/smartdns/smartdns.conf
 
 For cross-compilation, it is recommended to use [cross](https://github.com/cross-rs/cross) (requires Docker).
 
+## Troubleshooting
+
+### Long-running network anomalies (resource too busy)
+
+**Symptom**: After running for a long time, DNS queries become slow or fail, and logs show frequent `resource too busy` errors.
+
+**Root cause**: When `NameServerGroup` queries multiple upstream servers in parallel, the first successful response cancels the remaining queries. These cancelled queries leave "zombie" request entries in the `DnsMultiplexer` until the upstream server responds or times out. Slow upstream servers (5s timeout) allow zombies to accumulate and exhaust the 32-slot buffer, causing new queries to fail with `Busy` errors.
+
+**Fix (already applied)**: NameServerGroup now uses detached tasks instead of `FuturesUnordered` with early return. Queries that lose the race complete naturally in the background, releasing their slots without creating zombies.
+
+**Recommended config tuning**:
+- Remove unreliable upstream servers (expired certs, frequent timeouts) from your config — they are the primary source of both zombie accumulation and real query failures.
+- Use `speed-check-mode none` if you don't need ping-based IP selection, to reduce per-query overhead.
+- Keep `cache-size` large (e.g., 65536) to maximize cache hit rate and reduce upstream load.
+
+### Upstream DNS server health
+
+If you see `Failed to connect to any nameserver` errors in logs, check the health of your configured upstream servers:
+- **Certificate expired**: Remove or update the server URL.
+- **TLS handshake timeout**: The server may be unreachable or overloaded. Consider removing it.
+- **Request timeout**: Network path issues. Try a different server or protocol (e.g., switch from DoH to plain UDP).
+
+Use `log-level debug` to see detailed retry and error information.
+
 ## Acknowledgments !!!
 
 This software wouldn't have been possible without:
