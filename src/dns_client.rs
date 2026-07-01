@@ -45,19 +45,13 @@ pub const MAX_TTL: u32 = 86400_u32;
 /// hickory-proto 的 DnsMultiplexer 在活跃请求超过 CHANNEL_BUFFER_SIZE(32) 时
 /// 返回 ProtoErrorKind::Busy("resource too busy")。
 ///
-/// 之前的全局信号量方案存在问题：当 NameServerGroup 同时查询 N 个上游服务器时，
-/// 第一个返回后会 cancel 其余 N-1 个查询，这些被 cancel 的请求在 DnsMultiplexer
-/// 中变成僵尸请求（直到 poll_next 时才被 drop_cancelled 清理）。僵尸请求堆积导致
-/// active_requests.len() 虚高，新请求遇到 Busy。
+/// 并发数设为 16：实测数据表明降至 8 反而恶化 busy 率 3 倍（342/h→1057/h），
+/// 因为较低并发降低吞吐、延长排队，使僵尸请求占比升高。16 在个人电脑场景下
+/// 兼顾吞吐与槽位余量。
 ///
-/// 改为 per-NameServer 信号量后，每个服务器独立限制并发请求数。即使有僵尸请求，
-/// 也只影响单个服务器的 DnsMultiplexer，不会连锁影响其他服务器。
-///
-/// 并发数设为 8，留出 24 个槽位容纳僵尸请求：
-/// - 每个服务器 active_requests = 8（活跃）+ 24（僵尸）= 32 ≤ CHANNEL_BUFFER_SIZE
-/// - 22 小时实测：per-NameServer=16 时 busy 7532 次，降至 8 可进一步减少
-/// - 8 个并发槽位足够个人电脑场景使用
-const PER_NAMESERVER_CONCURRENCY: usize = 8;
+/// 注意：真正的僵尸请求根因已在 NameServerGroup::lookup 中通过 detached task
+/// 消除——查询自然完成后释放 DnsMultiplexer 槽位，不再依赖 cancel+retry。
+const PER_NAMESERVER_CONCURRENCY: usize = 16;
 
 /// 检测 ProtoError 是否可重试（连接断开、资源繁忙等临时性错误）。
 ///
@@ -442,21 +436,42 @@ mod name_server_group {
             name: N,
             options: O,
         ) -> Result<DnsResponse, LookupError> {
-            use futures_util::stream::FuturesUnordered;
-            use futures_util::StreamExt;
             let name = name.into_name()?;
-            let mut tasks: FuturesUnordered<_> = self
-                .servers
-                .iter()
-                .map(|ns| GenericResolver::lookup(ns.as_ref(), name.clone(), options.clone()))
-                .collect();
+            let options: LookupOptions = options.into();
 
-            while let Some(res) = tasks.next().await {
+            // 用 detached task 替代 FuturesUnordered 的早期 return，消除僵尸请求。
+            //
+            // 原方案：FuturesUnordered + 首个有效结果 return，会 drop 其余 future。
+            // 被 cancel 的请求在 DnsMultiplexer 的 active_requests 中遗留 request ID，
+            // 直到上游响应到达或超时才释放——这就是"僵尸请求"。慢速上游（5s 超时）
+            // 让僵尸长期占用 32 个槽位，导致新请求触发 Busy 错误（实测 1057 次/h）。
+            //
+            // 新方案：每个服务器查询 spawn 为独立 task，通过 mpsc channel 回传结果。
+            // 首个有效结果返回后，其余 task 在后台自然完成并释放 DnsMultiplexer 槽位，
+            // 不产生僵尸。代价是慢速服务器的查询多占用少量带宽，但 per-NameServer
+            // semaphore 会自然限流，且 task 会在超时后自动结束。
+            let total = self.servers.len();
+            let (tx, mut rx) = tokio::sync::mpsc::channel(total);
+
+            for ns in &self.servers {
+                let ns = Arc::clone(ns);
+                let name = name.clone();
+                let options = options.clone();
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let res = GenericResolver::lookup(ns.as_ref(), name, options).await;
+                    let _ = tx.send(res).await;
+                });
+            }
+            drop(tx);
+
+            let mut received = 0;
+            while let Some(res) = rx.recv().await {
+                received += 1;
                 if matches!(res.as_ref(), Ok(lookup) if !lookup.records().is_empty()) {
                     return res;
                 }
-
-                if tasks.is_empty() {
+                if received == total {
                     return res;
                 }
             }
