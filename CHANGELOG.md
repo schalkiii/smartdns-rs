@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### style: 修复 CI cleanliness 检查失败
+
+`cargo fmt --check` 在 5 个文件检测到格式 diff（行宽换行），导致 GitHub Actions 的 cleanliness job 全平台失败。运行 `cargo fmt --all` 统一格式后通过。涉及文件：app.rs、dns_client.rs、dns_mw_cache.rs、dns_mw_ns.rs、connection_provider_tests.rs。
+
 ### fix(dns_client): 消除 NameServerGroup 僵尸请求根因
 
 **问题**：长时间运行后出现大量 `resource too busy` 错误（实测 1057 次/h），并伴随网络查询异常。
