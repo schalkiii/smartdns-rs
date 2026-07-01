@@ -315,7 +315,9 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
 
             match cached_res {
                 // check if it's the same nameserver group.
-                Some((mut res, status)) if res.name_server_group() == Some(ctx.server_group_name()) => {
+                Some((mut res, status))
+                    if res.name_server_group() == Some(ctx.server_group_name()) =>
+                {
                     match status {
                         CacheStatus::Valid => {
                             self.try_prefetch(&query, ctx.server_group_name());

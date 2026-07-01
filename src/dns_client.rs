@@ -638,7 +638,8 @@ mod name_server {
                         retries -= 1;
                         log::debug!(
                             "[ns] lookup retryable error: {err}, retries left: {}, waiting {}ms",
-                            retries, backoff_ms,
+                            retries,
+                            backoff_ms,
                         );
                         // 持 permit 等待：阻止新请求涌入，让复用器排空或连接重建。
                         // 不丢 permit，防止其他请求立即填补空位导致 busy 死循环。

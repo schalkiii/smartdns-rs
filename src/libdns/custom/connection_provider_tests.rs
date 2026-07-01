@@ -479,8 +479,7 @@ async fn test_stress_mixed_protocol_concurrent() {
     for i in 0..HALF {
         let provider = provider.clone();
         let resource_busy = resource_busy.clone();
-        let local_addr =
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 40000u16 + i as u16);
+        let local_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 40000u16 + i as u16);
         let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 53);
         handles.push(tokio::spawn(async move {
             let result = provider.bind_udp(local_addr, server_addr).await;

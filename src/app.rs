@@ -388,7 +388,8 @@ pub fn serve(cfg: Arc<RuntimeConfig>) {
                         let app = app.clone();
                         bg_batch.push(async move {
                             let start = Instant::now();
-                            let (result, _from_cache) = process(handler, message, server_opts).await;
+                            let (result, _from_cache) =
+                                process(handler, message, server_opts).await;
                             app.bg_total_query_time_ns
                                 .fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
                             let _ = sender.send(result);
@@ -575,7 +576,10 @@ async fn process(
                             let response_message: Message =
                                 response.into_message(Some(response_header));
 
-                            (SerialMessage::raw(response_message, addr, protocol), from_cache)
+                            (
+                                SerialMessage::raw(response_message, addr, protocol),
+                                from_cache,
+                            )
                         }
                         OpCode::Status => todo!(),
                         OpCode::Notify => todo!(),

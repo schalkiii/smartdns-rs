@@ -259,12 +259,11 @@ async fn lookup_ip(
         .map(|m| m.as_slice())
         .unwrap_or_default();
 
-    let (response_strategy, speed_check_mode) =
-        if speed_check_mode.iter().any(|m| m.is_none()) {
-            (FastestResponse, &[][..])
-        } else {
-            (response_strategy, speed_check_mode)
-        };
+    let (response_strategy, speed_check_mode) = if speed_check_mode.iter().any(|m| m.is_none()) {
+        (FastestResponse, &[][..])
+    } else {
+        (response_strategy, speed_check_mode)
+    };
 
     let result = match response_strategy {
         FirstPing => lookup_ip_first_ping(server, &name, options, speed_check_mode).await,
@@ -441,9 +440,7 @@ async fn lookup_ip_fastest_response(
 ) -> IpStrategyResult {
     let mut events: FuturesUnordered<BoxFuture<'_, Result<DnsResponse, LookupError>>> = server
         .iter()
-        .map(|ns| {
-            async { per_nameserver_lookup_ip(ns, name.clone(), options).await }.boxed()
-        })
+        .map(|ns| async { per_nameserver_lookup_ip(ns, name.clone(), options).await }.boxed())
         .collect();
 
     let mut last_error = None;
