@@ -1,9 +1,9 @@
 [package]
 name = "smartdns"
-version = "0.13.0"
+version = "0.13.1"
 authors = ["YISH <mokeyish@hotmail.com>"]
 edition = "2024"
-rust-version = "1.92.0"
+rust-version = "1.95"
 
 keywords = ["DNS", "BIND", "dig", "SmartDNS", "Dnsmasq"]
 categories = ["network-programming"]
@@ -20,8 +20,6 @@ readme = "README.md"
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(nightly)'] }
 
-[package.metadata.patch]
-# crates = ["hickory-server", "hickory-proto"]
 
 [features]
 

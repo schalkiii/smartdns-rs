@@ -20,14 +20,16 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsNftsetMidd
         {
             let nftsets = rule.get(|n| n.nftset.as_ref().cloned());
             if let Some(nftsets) = nftsets {
-                let (ipv4_addrs, ipv6_addrs): (Vec<_>, Vec<_>) = lookup
+                let ip_addrs = lookup
                     .records()
                     .iter()
                     .filter_map(|r| r.data().ip_addr())
-                    .partition(|ip| ip.is_ipv4());
+                    .collect::<Vec<_>>();
 
-                if !ipv4_addrs.is_empty() || !ipv6_addrs.is_empty() {
+                if !ip_addrs.is_empty() {
                     tokio::spawn(async move {
+                        let (ipv4_addrs, ipv6_addrs): (Vec<_>, Vec<_>) =
+                            ip_addrs.into_iter().partition(|ip| ip.is_ipv4());
                         if !ipv4_addrs.is_empty() {
                             for nftset in &nftsets {
                                 if let ConfigForIP::V4(cfg) = nftset {

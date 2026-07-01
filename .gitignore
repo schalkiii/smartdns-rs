@@ -33,3 +33,7 @@ webui/out
 
 # localhost.crt
 # localhost.key
+
+*.local.*
+
+.agent
