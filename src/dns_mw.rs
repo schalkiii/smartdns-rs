@@ -264,6 +264,25 @@ mod tests {
 
             self
         }
+
+        /// 插入一条带 from_cache 标记的响应，用于模拟缓存命中场景
+        pub fn with_a_record_from_cache<N: IntoName>(
+            mut self,
+            name: N,
+            ip: Ipv4Addr,
+            ttl: u32,
+        ) -> Self {
+            let name = match name.into_name() {
+                Ok(name) => name,
+                Err(err) => panic!("invalid Name {err}"),
+            };
+            let query = Query::query(name, RecordType::A);
+            let record = Record::from_rdata(query.name().clone(), ttl, RData::A(ip.into()));
+            let mut res = DnsResponse::new_with_max_ttl(query.clone(), vec![record]);
+            res.mark_from_cache();
+            self.map.insert(query, Ok(res));
+            self
+        }
     }
 
     impl DnsMiddlewareHandler {

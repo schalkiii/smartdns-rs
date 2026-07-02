@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### fix(dns_mw_addr): 修复 AddressMiddleware 重建响应丢失 from_cache 标记
+
+**问题**：Web UI 仪表盘显示矛盾的缓存统计——命中率显示 76.6%（4414 命中 / 5766 总查询），但下方却显示"0 命中 + 5766 未命中"、"缓存命中耗时 0.0ms（0 次命中）"、"上游查询耗时 1290.5ms（5766 次未命中）"。
+
+**根因**：`AddressMiddleware` 在 `next.run()` 返回后，当 records 被修改（`Cow::Owned` 路径）时用 `DnsResponse::new_with_deadline` 重建响应。该构造函数重置 `from_cache: false` 和 `name_server_group: None`，丢失缓存命中标记。用户配置了 `max-reply-ip-num`、`rr-ttl-min`、`rr-ttl-max`、`rr-ttl-reply-max` 都会触发 `Cow::Owned` 路径，导致几乎所有缓存命中的响应都被误算作未命中。
+
+**数据流**：缓存命中时 `dns_mw_cache.rs` 调用 `res.mark_from_cache()` 和 `query_hits +1`（两个计数器都正确），但响应返回经过 `AddressMiddleware` 时被重建，`from_cache` 丢失。`app.rs` 的 `lookup.is_from_cache()` 返回 false，`cache_hit_queries` 始终为 0。前端命中率用 `cache_query_hits`（正确），但命中/未命中数用 `cache_hit_queries`（错误，恒 0）和 `cache_miss_queries`（错误，等于总查询数）。
+
+**修复**：在 `Cow::Owned` 重建后保留原 lookup 的 `from_cache` 和 `name_server_group` 标记。添加两个回归测试验证 TTL 调整和 `max-reply-ip-num` 截断场景下 `from_cache` 标记的保留。
+
 ### style: 修复 CI cleanliness 检查失败
 
 `cargo fmt --check` 在 5 个文件检测到格式 diff（行宽换行），导致 GitHub Actions 的 cleanliness job 全平台失败。运行 `cargo fmt --all` 统一格式后通过。涉及文件：app.rs、dns_client.rs、dns_mw_cache.rs、dns_mw_ns.rs、connection_provider_tests.rs。

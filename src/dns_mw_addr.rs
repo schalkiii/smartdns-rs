@@ -97,11 +97,24 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for AddressMiddle
                 }
 
                 match records {
-                    Cow::Owned(records) => DnsResponse::new_with_deadline(
-                        lookup.query().clone(),
-                        records,
-                        lookup.valid_until(),
-                    ),
+                    Cow::Owned(records) => {
+                        // 重建 DnsResponse 时保留 from_cache 与 name_server_group 标记，
+                        // 否则 new_with_deadline 会重置它们，导致上层缓存命中统计失真
+                        let is_from_cache = lookup.is_from_cache();
+                        let name_server_group = lookup.name_server_group().map(String::from);
+                        let mut res = DnsResponse::new_with_deadline(
+                            lookup.query().clone(),
+                            records,
+                            lookup.valid_until(),
+                        );
+                        if is_from_cache {
+                            res.mark_from_cache();
+                        }
+                        if let Some(group) = name_server_group {
+                            res = res.with_name_server_group(group);
+                        }
+                        res
+                    }
                     Cow::Borrowed(_) => lookup,
                 }
             }),
@@ -664,6 +677,46 @@ mod tests {
             .sum();
 
         assert_eq!(ip_count, 2);
+
+        Ok(())
+    }
+
+    /// 回归测试：缓存命中的响应经过 TTL 调整（Cow::Owned 重建）后，
+    /// from_cache 标记必须保留，否则上层缓存命中统计会失真
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_from_cache_preserved_after_ttl_clip() -> Result<(), DnsError> {
+        let cfg = RuntimeConfig::builder()
+            .with("rr-ttl-min 50")
+            .build()
+            .unwrap();
+
+        let mock = DnsMockMiddleware::mock(AddressMiddleware)
+            .with_a_record_from_cache("dns.google", "8.8.8.8".parse().unwrap(), 96)
+            .build(cfg);
+
+        let lookup = mock.lookup("dns.google", RecordType::A).await?;
+
+        assert!(lookup.is_from_cache(), "from_cache 标记在 TTL 调整后丢失");
+
+        Ok(())
+    }
+
+    /// 回归测试：缓存命中的响应经过 max-reply-ip-num 截断（Cow::Owned 重建）后，
+    /// from_cache 标记必须保留
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_from_cache_preserved_after_truncate() -> Result<(), DnsError> {
+        let cfg = RuntimeConfig::builder()
+            .with("max-reply-ip-num 2")
+            .build()
+            .unwrap();
+
+        let mock = DnsMockMiddleware::mock(AddressMiddleware)
+            .with_a_record_from_cache("dns.google", "8.8.8.8".parse().unwrap(), 96)
+            .build(cfg);
+
+        let lookup = mock.lookup("dns.google", RecordType::A).await?;
+
+        assert!(lookup.is_from_cache(), "from_cache 标记在截断后丢失");
 
         Ok(())
     }
