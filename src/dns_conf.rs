@@ -741,7 +741,7 @@ impl RuntimeConfigBuilder {
         });
         let ip_alias = Arc::new(IpMap::from_iter(ip_alias));
 
-        for (_, rule) in self.rule_groups.iter_mut() {
+        for rule in self.rule_groups.values_mut() {
             if !rule.cnames.is_empty() {
                 rule.cnames.dedup_by(|a, b| a.domain == b.domain);
             }

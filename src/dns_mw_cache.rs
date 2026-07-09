@@ -439,10 +439,11 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
     }
 }
 
-/// 判断响应是否为"否定响应"，可被安全地缓存一段时长：
-/// - `NXDOMAIN`：域名不存在；
-/// - `NOERROR` 且应答区为空（NODATA）：域名存在但不含所查询类型的记录
-///   （典型如双栈域名的 AAAA 查询）。
+/// 判断响应是否为"否定响应"，可被安全地缓存一段时长。
+///
+/// - `NXDOMAIN`：域名不存在。
+/// - `NOERROR` 且应答区为空（NODATA）：域名存在但不含所查询类型的记录，典型如双栈域名的 AAAA 查询。
+///
 /// `SERVFAIL` / `REFUSED` 等错误响应不缓存，避免掩盖上游故障。
 fn is_negative_response(resp: &DnsResponse) -> bool {
     match resp.response_code() {
@@ -627,10 +628,9 @@ impl DnsCache {
         })
         .await
         .unwrap_or_else(|e| {
-            Err(ProtoError::from(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("join error: {e}"),
-            )))
+            Err(ProtoError::from(std::io::Error::other(format!(
+                "join error: {e}"
+            ))))
         }) {
             error!("failed to save DNS cache file {}: {}", path.display(), err);
         } else {
@@ -1182,7 +1182,7 @@ impl DnsCacheEntry {
         let mut buf = vec![];
 
         for entry in entries {
-            buf.truncate(0);
+            buf.clear();
             let mut encoder = BinEncoder::new(&mut buf);
             if (*entry).emit(&mut encoder).is_ok() {
                 let _ = writer.write_all(&buf);

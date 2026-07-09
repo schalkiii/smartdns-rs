@@ -73,7 +73,7 @@ async fn create(
             .map(|(i, _)| *i);
 
         if idx.is_some() {
-            return Err(anyhow!("address already exists"))?;
+            Err(anyhow!("address already exists"))?;
         } else {
             config.push(ConfigLine::Config {
                 config: ConfigItem::Address(rule),
