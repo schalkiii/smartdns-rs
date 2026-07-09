@@ -355,6 +355,12 @@ impl RuntimeConfig {
         self.cache.serve_expired_reply_ttl.unwrap_or(5)
     }
 
+    /// cache negative responses (NXDOMAIN / NODATA)
+    #[inline]
+    pub fn cache_negative(&self) -> bool {
+        self.cache.cache_negative.unwrap_or(true)
+    }
+
     /// List of hosts that supply bogus NX domain results
     #[inline]
     pub fn bogus_nxdomain(&self) -> &Arc<IpSet> {

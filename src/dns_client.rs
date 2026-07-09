@@ -3,8 +3,11 @@ use std::{
     ops::Deref,
     path::PathBuf,
     slice::Iter,
-    sync::Arc,
-    time::Duration,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU32, Ordering},
+    },
+    time::{Duration, Instant},
 };
 
 use tokio::sync::{RwLock, Semaphore};
@@ -51,7 +54,29 @@ pub const MAX_TTL: u32 = 86400_u32;
 ///
 /// 注意：真正的僵尸请求根因已在 NameServerGroup::lookup 中通过 detached task
 /// 消除——查询自然完成后释放 DnsMultiplexer 槽位，不再依赖 cancel+retry。
-const PER_NAMESERVER_CONCURRENCY: usize = 16;
+const PER_NAMESERVER_CONCURRENCY: usize = 12;
+
+/// 单次上游查询的应用层超时（含 TCP/TLS/QUIC 连接建立阶段）。
+///
+/// hickory 的 `ResolverOpts.timeout` 仅约束“已建立连接后的报文交换”，
+/// 而 DoH/DoT/DoH3 的**连接建立**阶段不受其约束。上游不可达时，
+/// 单个查询会一直挂到操作系统级 TCP 超时（分钟级），这正是日志里
+/// 出现 500~780s 挂起的根因。这里用 `tokio::time::timeout` 包裹底层
+/// `send`，从根上把单次查询的最大耗时限制在 `NS_QUERY_TIMEOUT` 内。
+const NS_QUERY_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// 单个上游 `lookup` 的整体截止时间。即使发生可重试错误（Busy / 连接断开），
+/// 重试也不会超过此时间，避免退避重试风暴把整体延迟拖到几十秒。
+const NS_LOOKUP_DEADLINE: Duration = Duration::from_secs(8);
+
+/// 熔断：单个上游连续失败达到该次数后进入冷却，期间不再发查询。
+///
+/// 配合 NS_COOLDOWN 使用，避免对已确认不可达/极慢的上游反复空耗
+/// NS_QUERY_TIMEOUT(3s) + 占用信号量槽位 + 刷 debug 日志。
+const NS_FAIL_THRESHOLD: u32 = 3;
+
+/// 熔断冷却时长。冷却期内该上游被整体跳过，冷却结束后才允许再试一次。
+const NS_COOLDOWN: Duration = Duration::from_secs(30);
 
 /// 检测 ProtoError 是否可重试（连接断开、资源繁忙等临时性错误）。
 ///
@@ -493,6 +518,9 @@ mod name_server {
         connection: Connection,
         // per-NameServer 并发限制器，防止 DnsMultiplexer 过载
         semaphore: Arc<Semaphore>,
+        // 熔断状态：连续失败计数 + 最近一次失败时间（用于冷却跳过）
+        fail_streak: AtomicU32,
+        last_failure: Mutex<Option<Instant>>,
     }
 
     impl NameServer {
@@ -561,7 +589,32 @@ mod name_server {
                 options: options.into(),
                 connection,
                 semaphore: Arc::new(Semaphore::new(PER_NAMESERVER_CONCURRENCY)),
+                fail_streak: AtomicU32::new(0),
+                last_failure: Mutex::new(None),
             })
+        }
+
+        /// 上游是否处于熔断冷却中。连续失败达阈值且距上次失败仍在冷却窗口内返回 true。
+        fn in_cooldown(&self) -> bool {
+            let streak = self.fail_streak.load(Ordering::Relaxed);
+            if streak < NS_FAIL_THRESHOLD {
+                return false;
+            }
+            match *self.last_failure.lock().unwrap() {
+                Some(t) => t.elapsed() < NS_COOLDOWN,
+                None => false,
+            }
+        }
+
+        /// 记录一次成功，清零失败计数。
+        fn record_success(&self) {
+            self.fail_streak.store(0, Ordering::Relaxed);
+        }
+
+        /// 记录一次失败：递增计数并刷新最近失败时间。
+        fn record_failure(&self) {
+            self.fail_streak.fetch_add(1, Ordering::Relaxed);
+            *self.last_failure.lock().unwrap() = Some(Instant::now());
         }
 
         pub async fn warmup(&self) -> Result<(), ProtoError> {
@@ -590,6 +643,15 @@ mod name_server {
             let options: LookupOptions = options.into();
 
             let query = Query::query(name, options.record_type);
+            // 在 query 被 build_message 移动前捕获名称与类型，供超时日志使用
+            let query_name = query.name().to_utf8();
+            let query_type = query.query_type();
+
+            // 熔断：冷却期内直接跳过该上游，避免对已死/极慢服务器空耗 3s + 占槽 + 刷日志。
+            if self.in_cooldown() {
+                log::debug!("[ns] {} {} in cooldown, skipping", query_name, query_type,);
+                return Err(ProtoErrorKind::NoConnections.into());
+            }
 
             let client_subnet = options.client_subnet.or(self.options().client_subnet);
 
@@ -622,19 +684,45 @@ mod name_server {
             // 每个服务器独立限制并发，避免 NameServerGroup cancel 产生的僵尸请求
             // 连锁影响其他服务器。
             let semaphore = self.semaphore.clone();
-            let mut retries = 5u32;
+            let mut retries = 2u32;
             let mut backoff_ms = 50u64;
+            let deadline = tokio::time::Instant::now() + NS_LOOKUP_DEADLINE;
 
             loop {
                 let _permit = semaphore.acquire().await;
-                let res = {
+                // 应用层总超时：包裹底层 send，连 TCP/TLS/QUIC 的连接建立阶段也受约束。
+                // 上游不可达时单个查询最多挂 NS_QUERY_TIMEOUT，而不是分钟级。
+                let res = match tokio::time::timeout(NS_QUERY_TIMEOUT, {
                     let ns = &self.connection;
-                    ns.send(req.clone()).first_answer().await
+                    ns.send(req.clone()).first_answer()
+                })
+                .await
+                {
+                    Ok(inner) => inner,
+                    Err(_elapsed) => {
+                        log::debug!(
+                            "[ns] lookup timed out after {}ms on {} {}",
+                            NS_QUERY_TIMEOUT.as_millis(),
+                            query_name,
+                            query_type,
+                        );
+                        // 超时错误不可重试：让 NameServerGroup 立即尝试下一个上游，
+                        // 而不是在此上游上空耗 retries 次 × NS_QUERY_TIMEOUT。
+                        Err(ProtoErrorKind::Timeout.into())
+                    }
                 };
 
                 match res {
-                    Ok(response) => return Ok(From::<Message>::from(response.into())),
-                    Err(err) if is_retryable(&err) && retries > 0 => {
+                    Ok(response) => {
+                        // 成功即重置熔断计数。
+                        self.record_success();
+                        return Ok(From::<Message>::from(response.into()));
+                    }
+                    Err(err)
+                        if is_retryable(&err)
+                            && retries > 0
+                            && tokio::time::Instant::now() < deadline =>
+                    {
                         retries -= 1;
                         log::debug!(
                             "[ns] lookup retryable error: {err}, retries left: {}, waiting {}ms",
@@ -647,7 +735,11 @@ mod name_server {
                         // 指数退避：50ms → 100ms → 200ms → 400ms → 800ms，最大 1 秒
                         backoff_ms = (backoff_ms * 2).min(1000);
                     }
-                    Err(err) => return Err(err.into()),
+                    Err(err) => {
+                        // 非重试错误（含连接超时）：计入失败，触发熔断冷却。
+                        self.record_failure();
+                        return Err(err.into());
+                    }
                 }
             }
         }

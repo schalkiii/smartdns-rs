@@ -1,7 +1,11 @@
 use chrono::DateTime;
 use chrono::Local;
 use serde::{Deserialize, Serialize};
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
+use std::collections::hash_map::DefaultHasher;
 use std::fs::File;
+use std::hash::{Hash, Hasher};
 use std::io::Read;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
@@ -19,7 +23,7 @@ use crate::server::DnsHandle;
 use crate::{
     dns::*,
     libdns::proto::{
-        op::{Message, Query},
+        op::{Message, Query, ResponseCode},
         rr::DNSClass,
     },
     log::{debug, error, info},
@@ -46,29 +50,26 @@ pub struct DnsCacheMiddleware {
 
 impl DnsCacheMiddleware {
     pub fn new(cfg: &Arc<RuntimeConfig>, dns_handle: DnsHandle) -> Self {
-        let cache = DnsCache::new(
+        let cache = Arc::new(DnsCache::new(
             cfg.cache_size(),
             cfg.serve_expired(),
             cfg.serve_expired_ttl(),
             cfg.serve_expired_reply_ttl(),
-        );
+        ));
 
         if cfg.cache_persist() {
             let cache_file = cfg.cache_file();
-            let cache = cache.cache();
+            let cache_clone = cache.clone();
             let cache_checkpoint_time = cfg.cache_checkpoint_time();
             tokio::spawn(async move {
                 if cache_file.exists() {
-                    cache.lock().await.load(cache_file.as_path());
+                    cache_clone.load_from(cache_file.as_path()).await;
                 }
                 let interval = Duration::from_secs(cache_checkpoint_time);
                 loop {
                     tokio::select! {
                         _ = tokio::time::sleep(interval) => {
-                            let entries: Vec<DnsCacheEntry> = {
-                                let cache = cache.lock().await;
-                                cache.iter().map(|(_, e)| e.clone()).collect()
-                            };
+                            let entries = cache_clone.snapshot_entries().await;
                             let cache_file = cache_file.clone();
                             tokio::task::spawn_blocking(move || {
                                 let cache_to_file = || {
@@ -87,8 +88,7 @@ impl DnsCacheMiddleware {
                             });
                         }
                         _ = crate::signal::terminate() => {
-                            let cache = cache.lock().await;
-                            cache.persist(cache_file.as_path());
+                            cache_clone.persist_to(cache_file.as_path()).await;
                             log::debug!("save DNS cache to file {}", cache_file.display());
                             break;
                         }
@@ -116,7 +116,7 @@ impl DnsCacheMiddleware {
 
         let mw = Self {
             cfg: cfg.clone(),
-            cache: Arc::new(cache),
+            cache,
             prefetch_notify: Arc::new(DomainPrefetchingNotify::new()),
             client,
             prefetch_sender,
@@ -174,7 +174,7 @@ impl DnsCacheMiddleware {
 
                         debug!(
                             "[prefetch] check: cache={} entries, elapsed {:?}",
-                            cache.cache().lock().await.len(),
+                            cache.entry_count().await,
                             now.elapsed()
                         );
 
@@ -320,7 +320,10 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
                 {
                     match status {
                         CacheStatus::Valid => {
-                            self.try_prefetch(&query, ctx.server_group_name());
+                            // 否定缓存条目无需主动刷新（不进入 prefetch 就绪堆）。
+                            if !is_negative_response(&res) {
+                                self.try_prefetch(&query, ctx.server_group_name());
+                            }
 
                             debug!(
                                 "[cache] hit: {} {} (valid)",
@@ -336,7 +339,10 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
                             return Ok(res);
                         }
                         CacheStatus::Expired if ctx.cfg().serve_expired() && !no_serve_expired => {
-                            self.try_prefetch(&query, ctx.server_group_name());
+                            // 否定缓存条目无需主动刷新（不进入 prefetch 就绪堆）。
+                            if !is_negative_response(&res) {
+                                self.try_prefetch(&query, ctx.server_group_name());
+                            }
 
                             debug!(
                                 "[cache] hit: {} {} (expired, serve-stale)",
@@ -361,6 +367,23 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
 
         match res {
             Ok(lookup) => {
+                // 否定响应（NXDOMAIN / NODATA）缓存：这类响应在家庭网络中占比很高
+                // （尤其是双栈域名的 AAAA 查询，常常无 AAAA 记录而返回否定应答），
+                // 原版 smartdns 默认缓存之，可显著提升缓存命中率。
+                if !ctx.no_cache && ctx.cfg().cache_negative() && is_negative_response(&lookup) {
+                    let neg_ttl = negative_ttl(&lookup);
+                    self.cache
+                        .insert_negative(
+                            query.clone(),
+                            lookup.clone(),
+                            neg_ttl,
+                            ctx.server_group_name(),
+                            Instant::now(),
+                        )
+                        .await;
+                    return Ok(lookup);
+                }
+
                 if lookup
                     .records()
                     .iter()
@@ -416,6 +439,32 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
     }
 }
 
+/// 判断响应是否为"否定响应"，可被安全地缓存一段时长：
+/// - `NXDOMAIN`：域名不存在；
+/// - `NOERROR` 且应答区为空（NODATA）：域名存在但不含所查询类型的记录
+///   （典型如双栈域名的 AAAA 查询）。
+/// `SERVFAIL` / `REFUSED` 等错误响应不缓存，避免掩盖上游故障。
+fn is_negative_response(resp: &DnsResponse) -> bool {
+    match resp.response_code() {
+        ResponseCode::NXDomain => true,
+        ResponseCode::NoError => resp.answers().is_empty(),
+        _ => false,
+    }
+}
+
+/// 从 SOA 记录的 minimum 字段（RFC 2308 否定缓存 TTL）提取否定缓存时长。
+/// 无 SOA 时回退到 600s，并做合理限幅（下限 60s，上限 3600s）。
+fn negative_ttl(resp: &DnsResponse) -> Duration {
+    let mut ttl = 600u64;
+    for auth in resp.authorities() {
+        if let RData::SOA(soa) = auth.data() {
+            ttl = u64::from(soa.minimum()).max(60);
+            break;
+        }
+    }
+    Duration::from_secs(ttl.min(3600))
+}
+
 struct DomainPrefetchingNotify {
     notity: Arc<Notify>,
     tick: RwLock<Instant>,
@@ -468,8 +517,47 @@ impl Deref for DomainPrefetchingNotify {
 const MAX_TTL: u32 = 86400_u32;
 
 /// An LRU eviction cache specifically for storing DNS records
+/// 缓存分片数。将单一全局锁拆分为 N 个分片锁，降低高 QPS 下的串行化天花板。
+const CACHE_SHARD_COUNT: usize = 16;
+
+/// prefetch 就绪堆的键：仅按过期时间 `Instant` 排序（Query 不参与比较，
+/// 因为 hickory 的 Query 未实现 Ord）。用于 BinaryHeap<Reverse<...>> 形成最小堆。
+#[derive(Clone)]
+struct PrefetchKey(Instant, Query);
+
+impl PartialEq for PrefetchKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+impl Eq for PrefetchKey {}
+impl PartialOrd for PrefetchKey {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for PrefetchKey {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.cmp(&other.0)
+    }
+}
+
+/// 根据 query 稳定地映射到分片索引。insert/get/get_expired 必须保持一致。
+#[inline]
+fn shard_index_of(query: &Query, n: usize) -> usize {
+    let mut h = DefaultHasher::new();
+    query.name().hash(&mut h);
+    query.query_type().hash(&mut h);
+    query.query_class().hash(&mut h);
+    (h.finish() as usize) % n
+}
+
 pub struct DnsCache {
-    cache: Arc<Mutex<LruCache<Query, DnsCacheEntry>>>,
+    /// 分片缓存：每个分片一把独立的 tokio Mutex，路由由 shard_index_of 决定。
+    shards: Vec<Arc<Mutex<LruCache<Query, DnsCacheEntry>>>>,
+    /// prefetch 就绪堆：按过期时间排序的最小堆。insert 时压入，
+    /// get_expired 时只弹出已过期的条目，避免对整张 LruCache 做全表扫描。
+    prefetch_heap: Mutex<BinaryHeap<Reverse<PrefetchKey>>>,
     serve_expired: bool,
     expired_ttl: u64,
     expired_reply_ttl: u64,
@@ -483,12 +571,19 @@ impl DnsCache {
         expired_ttl: u64,
         expired_reply_ttl: u64,
     ) -> Self {
-        let cache = Arc::new(Mutex::new(LruCache::new(
-            NonZeroUsize::new(cache_size).unwrap(),
-        )));
+        // 每片容量至少 1，保证总容量不低于 cache_size。
+        let per_shard = (cache_size / CACHE_SHARD_COUNT).max(1);
+        let shards = (0..CACHE_SHARD_COUNT)
+            .map(|_| {
+                Arc::new(Mutex::new(LruCache::new(
+                    NonZeroUsize::new(per_shard).unwrap(),
+                )))
+            })
+            .collect();
 
         Self {
-            cache,
+            shards,
+            prefetch_heap: Mutex::new(BinaryHeap::new()),
             serve_expired,
             expired_ttl,
             expired_reply_ttl,
@@ -496,28 +591,127 @@ impl DnsCache {
         }
     }
 
-    fn cache(&self) -> Arc<Mutex<LruCache<Query, DnsCacheEntry>>> {
-        self.cache.clone()
+    /// 缓存条目总数（跨所有分片求和），用于日志与调试。
+    async fn entry_count(&self) -> usize {
+        let mut total = 0;
+        for shard in &self.shards {
+            total += shard.lock().await.len();
+        }
+        total
+    }
+
+    /// 导出全部缓存条目快照（用于周期落盘）。
+    async fn snapshot_entries(&self) -> Vec<DnsCacheEntry> {
+        let mut out = Vec::new();
+        for shard in &self.shards {
+            let guard = shard.lock().await;
+            for (_, entry) in guard.iter() {
+                out.push(entry.clone());
+            }
+        }
+        out
+    }
+
+    async fn persist_to<P: AsRef<Path>>(&self, path: P) {
+        let entries = self.snapshot_entries().await;
+        let path = path.as_ref().to_path_buf();
+        // 落盘为阻塞 IO，放到 spawn_blocking 避免阻塞异步运行时。
+        let path_in_closure = path.clone();
+        if let Err(err) = tokio::task::spawn_blocking(move || {
+            let mut file = File::options()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .open(&path_in_closure)?;
+            DnsCacheEntry::serialize_many(entries.iter(), &mut file)
+        })
+        .await
+        .unwrap_or_else(|e| {
+            Err(ProtoError::from(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("join error: {e}"),
+            )))
+        }) {
+            error!("failed to save DNS cache file {}: {}", path.display(), err);
+        } else {
+            info!("save DNS cache to file {:?} successfully.", path);
+        }
+    }
+
+    async fn load_from<P: AsRef<Path>>(&self, path: P) {
+        let path = path.as_ref().to_path_buf();
+        let path_in_closure = path.clone();
+        let data = match tokio::task::spawn_blocking(move || {
+            let mut file = File::options().read(true).open(&path_in_closure)?;
+            let mut data = vec![];
+            file.read_to_end(&mut data)?;
+            Ok::<_, std::io::Error>(data)
+        })
+        .await
+        {
+            Ok(Ok(data)) => data,
+            Ok(Err(e)) => {
+                error!("failed to read DNS cache file {}: {}", path.display(), e);
+                return;
+            }
+            Err(e) => {
+                error!(
+                    "failed to read DNS cache file {}: join error {e}",
+                    path.display()
+                );
+                return;
+            }
+        };
+
+        let now = Instant::now();
+        match DnsCacheEntry::deserialize_many(&data) {
+            Ok(entries) => {
+                let count = entries.len();
+                for entry in entries {
+                    let query = entry.data.query().clone();
+                    let idx = shard_index_of(&query, CACHE_SHARD_COUNT);
+                    self.shards[idx]
+                        .lock()
+                        .await
+                        .put(query.clone(), entry.clone());
+                    // 重建就绪堆（用条目的真实 valid_until）。
+                    self.prefetch_heap
+                        .lock()
+                        .await
+                        .push(Reverse(PrefetchKey(entry.valid_until, query)));
+                }
+                info!(
+                    "DNS cache {} records loaded, elapsed {:?}",
+                    count,
+                    now.elapsed()
+                );
+            }
+            Err(err) => error!("failed to read DNS cache file {:?} {}", path, err),
+        }
     }
 
     pub async fn clear(&self) {
-        self.cache.lock().await.clear();
+        for shard in &self.shards {
+            shard.lock().await.clear();
+        }
     }
 
     pub async fn cached_records(&self) -> Vec<CachedQueryRecord> {
-        self.cache
-            .lock()
-            .await
-            .iter()
-            .map(|(query, entry)| CachedQueryRecord {
-                name: query.name().clone(),
-                query_type: query.query_type(),
-                query_class: query.query_class(),
-                records: entry.data.records().to_vec().into_boxed_slice(),
-                hits: entry.stats.hits,
-                last_access: entry.stats.last_access,
-            })
-            .collect()
+        let mut out = Vec::new();
+        for shard in &self.shards {
+            let guard = shard.lock().await;
+            for (query, entry) in guard.iter() {
+                out.push(CachedQueryRecord {
+                    name: query.name().clone(),
+                    query_type: query.query_type(),
+                    query_class: query.query_class(),
+                    records: entry.data.records().to_vec().into_boxed_slice(),
+                    hits: entry.stats.hits,
+                    last_access: entry.stats.last_access,
+                });
+            }
+        }
+        out
     }
 
     pub fn query_hits(&self) -> u64 {
@@ -545,22 +739,59 @@ impl DnsCache {
 
         let valid_until = now + ttl;
 
-        // insert into the LRU
         let lookup = DnsResponse::new_with_deadline(query.clone(), records, valid_until)
             .with_name_server_group(name_server_group.to_string());
 
+        let idx = shard_index_of(&query, CACHE_SHARD_COUNT);
         {
-            let mut cache = self.cache.lock().await;
-            if let Some(entry) = cache.get_mut(&query) {
+            let mut shard = self.shards[idx].lock().await;
+            if let Some(entry) = shard.get_mut(&query) {
                 entry.data = lookup.clone();
                 entry.valid_until = valid_until;
                 entry.stats.hit();
             } else {
-                cache.put(query, DnsCacheEntry::new(lookup.clone(), valid_until));
+                shard.put(
+                    query.clone(),
+                    DnsCacheEntry::new(lookup.clone(), valid_until),
+                );
             }
         }
+        // 压入 prefetch 就绪堆（最小堆按过期时间排序）。
+        self.prefetch_heap
+            .lock()
+            .await
+            .push(Reverse(PrefetchKey(valid_until, query)));
 
         lookup
+    }
+
+    /// 插入否定响应（NXDOMAIN / NODATA）。
+    ///
+    /// 否定响应与正向响应共用同一张表：其 `DnsResponse` 已携带正确的响应码
+    /// （NXDOMAIN）与 SOA，命中时由 `get` 原样返回即可，客户端收到否定应答，
+    /// 同时本次查询计入缓存命中。否定条目不进入 prefetch 就绪堆（无需主动刷新）。
+    async fn insert_negative(
+        &self,
+        query: Query,
+        mut resp: DnsResponse,
+        ttl: Duration,
+        name_server_group: &str,
+        now: Instant,
+    ) {
+        let valid_until = now + ttl;
+        resp = resp.with_name_server_group(name_server_group.to_string());
+        // 将应答区记录的 TTL 限幅到否定 TTL 范围内，避免向下游返回过大的 TTL。
+        resp.set_max_ttl(ttl.as_secs() as u32);
+
+        let idx = shard_index_of(&query, CACHE_SHARD_COUNT);
+        let mut shard = self.shards[idx].lock().await;
+        if let Some(entry) = shard.get_mut(&query) {
+            entry.data = resp.clone();
+            entry.valid_until = valid_until;
+            entry.stats.hit();
+        } else {
+            shard.put(query.clone(), DnsCacheEntry::new(resp.clone(), valid_until));
+        }
     }
 
     /// inserts a record based on the name and type.
@@ -653,9 +884,10 @@ impl DnsCache {
 
     /// Based on the query, see if there are any records available
     async fn get(&self, query: &Query, now: Instant) -> Option<(DnsResponse, CacheStatus)> {
-        let mut cache = self.cache.lock().await;
+        let idx = shard_index_of(query, CACHE_SHARD_COUNT);
+        let mut guard = self.shards[idx].lock().await;
 
-        cache.get_mut(query).map(|value| {
+        guard.get_mut(query).map(|value| {
             value.stats.hit();
             let mut res = value.data.clone();
 
@@ -700,53 +932,71 @@ impl DnsCache {
         base_interval: Duration,
         max_count: usize,
     ) -> (Vec<(Query, Option<String>)>, Duration) {
-        let mut cache = self.cache.lock().await;
-        let mut most_recent = Duration::from_secs(MAX_TTL as u64);
+        // 只锁定就绪堆，逐个弹出已过期的条目，避免对整张 LruCache 做全表扫描
+        // （原实现每次都遍历全部 cache_size 条记录，并在持锁期间完成，造成锁竞争）。
+        let mut heap = self.prefetch_heap.lock().await;
+        let mut expired = Vec::with_capacity(max_count);
 
-        if !cache.is_empty() {
-            let mut expired = vec![];
-            let now = if self.expired_ttl > 0 {
-                now.checked_sub(Duration::from_secs(self.expired_ttl))
-                    .unwrap_or(now)
-            } else {
-                now
-            } + Duration::from_secs(seconds_ahead.unwrap_or(5));
-
-            for (query, entry) in cache.iter_mut() {
-                if expired.len() >= max_count {
-                    break;
-                }
-                if !entry.should_retry_prefetch(now, base_interval) {
-                    continue;
-                }
-                if !query.query_type().is_ip_addr() {
-                    continue;
-                }
-
-                if entry.is_current(now) {
-                    most_recent = most_recent.min(entry.ttl(now));
-                    continue;
-                }
-
-                entry.is_in_prefetching = true;
-
-                expired.push((
-                    query.to_owned(),
-                    entry.stats.hits,
-                    entry.data.name_server_group().map(String::from),
-                ));
-            }
-            drop(cache);
-
-            expired.sort_by_key(|(_, hits, _)| std::cmp::Reverse(*hits));
-
-            (
-                expired.into_iter().map(|(q, _, g)| (q, g)).collect(),
-                most_recent,
-            )
+        // 判定过期的阈值：考虑 expired_ttl 提前量与 seconds_ahead 提前量。
+        let threshold = if self.expired_ttl > 0 {
+            now.checked_sub(Duration::from_secs(self.expired_ttl))
+                .unwrap_or(now)
         } else {
-            (Vec::with_capacity(0), most_recent)
+            now
+        } + Duration::from_secs(seconds_ahead.unwrap_or(5));
+
+        while expired.len() < max_count {
+            // 堆顶为最早过期时间；仍未来期则停止。
+            let top = match heap.peek() {
+                Some(t) => t.clone(),
+                None => break,
+            };
+            let PrefetchKey(exp, query) = top.0;
+            if exp > threshold {
+                break;
+            }
+            heap.pop();
+
+            let idx = shard_index_of(&query, CACHE_SHARD_COUNT);
+            let mut guard = self.shards[idx].lock().await;
+            let entry = match guard.get_mut(&query) {
+                Some(e) => e,
+                None => continue, // 已被 LRU 淘汰，堆中存在过期条目，丢弃
+            };
+            if !entry.should_retry_prefetch(threshold, base_interval) {
+                continue;
+            }
+            if !query.query_type().is_ip_addr() {
+                continue;
+            }
+            if entry.is_current(threshold) {
+                // 已被刷新，尚未真正过期
+                continue;
+            }
+
+            entry.is_in_prefetching = true;
+
+            expired.push((
+                query.to_owned(),
+                entry.stats.hits,
+                entry.data.name_server_group().map(String::from),
+            ));
         }
+
+        // 下次检查时间：取堆中下一个（最早的）未过期条目距离现在的间隔。
+        let most_recent = match heap.peek().cloned() {
+            Some(Reverse(PrefetchKey(exp, _))) if exp > threshold => exp
+                .saturating_duration_since(threshold)
+                .min(Duration::from_secs(MAX_TTL as u64)),
+            _ => Duration::from_secs(MAX_TTL as u64),
+        };
+
+        expired.sort_by_key(|(_, hits, _)| std::cmp::Reverse(*hits));
+
+        (
+            expired.into_iter().map(|(q, _, g)| (q, g)).collect(),
+            most_recent,
+        )
     }
 }
 
@@ -1091,39 +1341,19 @@ mod tests {
 
         assert!(cache.get(lookup1.data.query(), now).await.is_some());
 
-        {
-            let lru_cache = cache.cache();
-            let mut lru_cache = lru_cache.lock().await;
-            assert_eq!(lru_cache.len(), 2);
+        assert_eq!(cache.entry_count().await, 2);
 
-            lru_cache.persist("./logs/smartdns-test.cache");
+        cache.persist_to("./logs/smartdns-test.cache").await;
+        assert!(cache.get(lookup1.data.query(), now).await.is_some());
 
-            assert!(lru_cache.get(lookup1.data.query()).is_some());
+        cache.clear().await;
+        assert_eq!(cache.entry_count().await, 0);
 
-            lru_cache.clear();
+        cache.load_from("./logs/smartdns-test.cache").await;
+        assert_eq!(cache.entry_count().await, 2);
 
-            assert_eq!(lru_cache.len(), 0);
-
-            lru_cache.load("./logs/smartdns-test.cache");
-
-            assert_eq!(lru_cache.len(), 2);
-
-            assert!(
-                lru_cache
-                    .iter()
-                    .map(|(q, _)| q)
-                    .any(|q| q == lookup1.data.query())
-            );
-            assert!(
-                lru_cache
-                    .iter()
-                    .map(|(q, _)| q)
-                    .any(|q| q == lookup2.data.query())
-            );
-
-            assert!(lru_cache.contains(lookup1.data.query()));
-            assert!(lru_cache.contains(lookup2.data.query()));
-        };
+        assert!(cache.get(lookup1.data.query(), now).await.is_some());
+        assert!(cache.get(lookup2.data.query(), now).await.is_some());
 
         let res = cache.get(lookup1.data.query(), now).await;
 

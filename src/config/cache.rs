@@ -55,6 +55,15 @@ pub struct CacheConfig {
     /// ```
     pub serve_expired_reply_ttl: Option<u64>,
 
+    /// cache negative responses (NXDOMAIN / NODATA)
+    ///
+    /// cache-negative [yes|no]
+    /// ```
+    /// example:
+    ///   cache-negative yes
+    /// ```
+    pub cache_negative: Option<bool>,
+
     /// cache save interval
     pub checkpoint_time: Option<u64>,
 }

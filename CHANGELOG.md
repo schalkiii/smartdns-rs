@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+### fix(dns_mw_cache): 恢复否定缓存（negative caching）以提升命中率
+
+**问题**：Web UI 显示缓存命中率长期仅 44%，而原版 smartdns 可达 90%+。
+
+**根因**：`dns_mw_cache.rs` 中 `negative_ttl` 相关逻辑被注释掉，导致 NXDOMAIN / NODATA（否定应答）完全不被缓存。实测最近 1 小时真实客户端查询中 **47.1% 为否定应答**（绝大多数是双栈域名的 AAAA 查询无 AAAA 记录），这些每次都被重新向上游解析，全部计为未命中。
+
+**验证**（直连 127.0.0.1:9053 受控实测）：
+- 正向缓存（5 个真实域名各查 2 次）→ 第二次 100% 命中 ✅
+- serve-expired（24 个已过期条目）→ 83% 命中 ✅（说明 600s TTL 硬上限被 7 天陈旧窗口掩盖，非命中率主因）
+- 否定缓存（`rdelivery.qq.com` AAAA，已知 NXDOMAIN，查 2 次）→ miss +2、hit +0 ❌
+
+**修复**：
+- `dns_mw_cache.rs`：对 NXDOMAIN / NODATA 响应调用新增 `insert_negative()`，按 SOA minimum TTL（限幅 60s~3600s）入缓存；命中时原样返回并计为 hit。SERVFAIL / REFUSED 仍不缓存；否定条目不进 prefetch 堆。
+- `dns_conf.rs` / `config/cache.rs`：新增 `cache-negative` 配置（默认 `yes`，对齐原版）。
+- `smartdns.conf`：已显式加 `cache-negative yes`。
+
+**说明**：命中率公式 `cache_query_hits / total_queries` 本身正确（`hits + misses == total` 自洽）；界面 `cache_hits` 字段为各条目命中计数之和（跨重启累加），与 `total_queries` 不可比，仅为展示用，不影响真实命中率。
+
 ### fix(dns_mw_addr): 修复 AddressMiddleware 重建响应丢失 from_cache 标记
 
 **问题**：Web UI 仪表盘显示矛盾的缓存统计——命中率显示 76.6%（4414 命中 / 5766 总查询），但下方却显示"0 命中 + 5766 未命中"、"缓存命中耗时 0.0ms（0 次命中）"、"上游查询耗时 1290.5ms（5766 次未命中）"。

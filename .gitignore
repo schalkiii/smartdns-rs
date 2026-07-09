@@ -37,3 +37,4 @@ webui/out
 *.local.*
 
 .agent
+.workbuddy/

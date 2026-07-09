@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SmartDNS-rs 性能 Review 与优化文档</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --border:#30363d;
+    --text:#e6edf3; --muted:#8b949e; --accent:#58a6ff; --green:#3fb950;
+    --yellow:#d29922; --red:#f85149; --purple:#bc8cff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
+    line-height:1.7;font-size:15px;padding:32px}
+  .wrap{max-width:1080px;margin:0 auto}
+  h1{font-size:28px;margin:0 0 6px;border-bottom:1px solid var(--border);padding-bottom:14px}
+  h2{font-size:21px;margin:34px 0 12px;color:var(--accent);border-left:4px solid var(--accent);padding-left:10px}
+  h3{font-size:17px;margin:22px 0 8px;color:var(--text)}
+  .sub{color:var(--muted);font-size:14px;margin-bottom:20px}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:18px 20px;margin:14px 0}
+  .kv{color:var(--muted)}
+  code{background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:1px 6px;font-size:13px;color:var(--purple);font-family:"SFMono-Regular",Consolas,monospace}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:14px}
+  th,td{text-align:left;padding:10px 12px;border:1px solid var(--border);vertical-align:top}
+  th{background:var(--panel2);color:var(--text);font-weight:600}
+  tr:nth-child(even){background:rgba(255,255,255,.02)}
+  .tag{display:inline-block;padding:1px 9px;border-radius:20px;font-size:12px;font-weight:700;color:#0d1117}
+  .p0{background:var(--red)} .p1{background:var(--yellow)} .p2{background:var(--accent)}
+  .p3{background:var(--green)} .p4{background:var(--muted)} .ok{background:var(--green)}
+  .ops{background:var(--purple)}
+  .mono{font-family:"SFMono-Regular",Consolas,monospace;font-size:13px;color:var(--text)}
+  .note{background:var(--panel2);border-left:4px solid var(--yellow);padding:10px 14px;margin:12px 0;border-radius:0 8px 8px 0;font-size:14px}
+  .good{border-left-color:var(--green)} .bad{border-left-color:var(--red)} .info{border-left-color:var(--accent)}
+  ul{margin:8px 0 8px 4px;padding-left:20px} li{margin:5px 0}
+  .small{font-size:13px;color:var(--muted)}
+  .fileref{color:var(--muted);font-size:12.5px}
+  .footer{margin-top:36px;padding-top:14px;border-top:1px solid var(--border);color:var(--muted);font-size:13px}
+  a{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>SmartDNS-rs 性能 Review 与优化文档</h1>
+<div class="sub">生成于 2026-07-08 · 基于 <span class="mono">src/dns_client.rs</span>、<span class="mono">src/dns_mw_cache.rs</span>、<span class="mono">src/dns_mw_dualstack.rs</span>、<span class="mono">src/dns_mw_ns.rs</span> 与运行日志的实测</div>
+
+<div class="panel">
+<b>背景</b>：此前排查出上游查询耗时高达数百秒、日志刷屏 <code>resource too busy</code> 的问题。已落地一批优化（见 §1）。本文件在那些修复之上，<b>继续做代码级性能 review</b>，找出仍存在的隐患，并补充配置/运维约定文档。
+</div>
+
+<h2>1. 已完成的优化（基线）</h2>
+<table>
+<tr><th>类别</th><th>改动</th><th>位置</th><th>效果</th></tr>
+<tr><td>代码</td><td>单次上游查询加 <code>tokio::time::timeout(3s)</code> 应用层总超时（覆盖 TCP/TLS/QUIC 连接建立）</td><td><span class="fileref">dns_client.rs:649</span></td><td class="ok">消除 500–780s 挂起 → 最多 3s 返回</td></tr>
+<tr><td>代码</td><td>超时错误不重试（<code>Timeout</code> 不在 <code>is_retryable</code> 列表，L75-93）</td><td><span class="fileref">dns_client.rs:75</span></td><td>单上游出错即快速失败，无 3s×重试放大</td></tr>
+<tr><td>代码</td><td><code>PER_NAMESERVER_CONCURRENCY</code> 16 → 12</td><td><span class="fileref">dns_client.rs:54</span></td><td>降低与 hickory 通道(32)撞满的概率</td></tr>
+<tr><td>代码</td><td>重试 5 → 2，整体截止 8s</td><td><span class="fileref">dns_client.rs:641,643</span></td><td>抑制退避重试风暴</td></tr>
+<tr><td>配置</td><td>UDP 快服务器去 <code>-e</code> 纳入默认组；加 <code>server-tls 223.5.5.5:853</code></td><td>smartdns.conf</td><td>提供快速 UDP/DoT 兜底</td></tr>
+<tr><td>配置</td><td>移除 <code>doh.360.cn</code>（直连死）；<code>dns.alidns.com</code> 由 h3 改 https；加 <code>dns.reitmeier.me</code></td><td>smartdns.conf</td><td>剔除不可达上游，避免 QUIC 被墙</td></tr>
+<tr><td>配置</td><td><code>response-mode fastest-response</code> + <code>force-aaaa-soa yes</code></td><td>smartdns.conf</td><td>先返回最快 NoError；AAAA 直接 SOA</td></tr>
+<tr><td>构建</td><td>编译必须带 <code>--features web-ui</code></td><td>部署约定</td><td>修复 WebUI 全路径 404</td></tr>
+</table>
+
+<h2>2. 代码 Review 发现的潜在性能问题（按严重度排序）</h2>
+
+<div class="panel">
+<h3><span class="tag p0">P0</span> 上游无熔断 / 健康检查机制</h3>
+<div class="fileref">dns_client.rs · <code>NameServerGroup::lookup</code> (L447-493) 与 <code>NameServer::lookup</code> (L597-689)</div>
+<p><b>现象</b>：<code>NameServerGroup::lookup</code> 对 <code>self.servers</code> 里的<b>每一个</b>上游都 <code>tokio::spawn</code> 一个 task，没有任何"已知故障跳过"逻辑。<code>NameServer</code> 内部也没有失败计数。</p>
+<p><b>后果</b>：每个客户端查询 + 每次 prefetch 都会<b>向所有上游（含死的）</b>发请求。对死/慢上游，每个查询都要空耗满 <code>NS_QUERY_TIMEOUT</code>(3s)、且<b>全程持有 1 个信号量 permit</b>，并产生一条 debug 日志。<br>
+<b>实测佐证</b>（当前日志）：<code>lookup timed out</code> = 3310 次，<code>resource too busy</code> = 2606 次，且连原本健康的 <code>doh.pub</code>/<code>dns.alidns.com</code> 也出现间歇超时。</p>
+<p class="note ok"><b>✅ 已实现（2026-07-08，待编译验证）</b>：新增 <code>fail_streak: AtomicU32</code> + <code>last_failure: Mutex&lt;Option&lt;Instant&gt;&gt;</code>。连续失败 ≥ <code>NS_FAIL_THRESHOLD(3)</code> 次进入 <code>NS_COOLDOWN(30s)</code> 冷却，期间 <code>lookup</code> 直接进入 cooldown 分支跳过该上游；成功即 <code>record_success()</code> 清零；超时/非重试错误触发 <code>record_failure()</code>。死上游不再每查询空耗 3s + 刷日志 + 占 permit。</p>
+</div>
+
+<div class="panel">
+<h3><span class="tag p1">P1</span> 缓存 prefetch 扫描是 O(cache_size) 且持全局锁</h3>
+<div class="fileref">dns_mw_cache.rs · <code>get_expired</code> (L696-744) 与 <code>start_prefetching</code> 调度 (L136-219)</div>
+<p><b>现象</b>：<code>get_expired</code> 用 <code>for (query, entry) in cache.iter_mut()</code> <b>遍历整个 LruCache</b>，并在 <code>cache.lock().await</code> 持锁下进行。<code>start_prefetching</code> 在<b>任意</b>缓存记录的 TTL 到期时（L398-402 <code>notify_after(ttl)</code>）就触发一次全扫描。</p>
+<p><b>后果</b>：<code>cache-size 65536</code> 下，每次 prefetch 扫描最多扫 6.5 万条、且持有所有查询都要抢的同一把锁 → 查询延迟尖刺 + 无意义 CPU。缓存越热、域名越多，扫描越频繁。</p>
+<p class="note ok"><b>✅ 已实现（2026-07-08，待编译验证）</b>：新增 <code>prefetch_heap: Mutex&lt;BinaryHeap&lt;Reverse&lt;PrefetchKey&gt;&gt;&gt;</code>（仅按 <code>Instant</code> 排序）。<code>insert</code> 时压入 <code>(valid_until, query)</code>；<code>get_expired</code> 改为只 <code>peek/pop</code> 已过期的堆顶条目（O(到期数)），不再遍历整张 LruCache。L177 调试用的 <code>cache.lock().await.len()</code> 已改为 <code>entry_count().await</code>（非全扫描）。</p>
+</div>
+
+<div class="panel">
+<h3><span class="tag p2">P2</span> 缓存使用单一全局 <code>Mutex&lt;LruCache&gt;</code></h3>
+<div class="fileref">dns_mw_cache.rs · L472（定义），L527/L655（get/insert 加锁）</div>
+<p><b>现象</b>：所有缓存读/写都串行在同一把 tokio <code>Mutex</code> 上。</p>
+<p><b>后果</b>：家庭网络 QPS 下无感；高 QPS 时成为天花板。</p>
+<p class="note ok"><b>✅ 已实现（2026-07-08，待编译验证）</b>：<code>DnsCache</code> 改为 <code>shards: Vec&lt;Arc&lt;Mutex&lt;LruCache&gt;&gt;&gt;</code>（<code>CACHE_SHARD_COUNT=16</code>），按 <code>shard_index_of(query)</code> 稳定路由；<code>get/insert/clear/cached_records/snapshot_entries</code> 均按分片加锁。就绪堆为单一结构（prefetch 本就是单 worker）。落盘接口改为 <code>persist_to/load_from</code>（启动时重建堆）。</p>
+</div>
+
+<div class="panel">
+<h3><span class="tag p3">P3</span> <code>dualstack-ip-selection yes</code> 与 <code>speed-check-mode none</code> 自相矛盾</h3>
+<div class="fileref">dns_mw_dualstack.rs · <code>which_faster</code> (L146-173)；dns_mw_ns.rs · L250-266</div>
+<p><b>现象</b>：<code>speed-check-mode none</code> 时，<code>dns_mw_ns</code> 会强制 <code>response_strategy = FastestResponse</code>，且 <code>multi_mode_ping_fastest</code> 因无 ping 地址返回 <code>None</code>；<code>which_faster</code> 落入 <code>this_ping None =&gt; that_faster = true</code> 分支，<b>偏向 AAAA</b>。</p>
+<p><b>后果</b>：双栈选择实际无法测速，且逻辑上偏向 AAAA。当前因 <code>force-aaaa-soa yes</code> 让 AAAA 秒回 SOA、无真实 AAAA 可比较，故基本无害——但配置语义矛盾、易误导。</p>
+<p class="note ok"><b>✅ 已修复（2026-07-08）</b>：已从 <code>smartdns.conf</code> 删除 <code>dualstack-ip-selection yes</code> 及其 threshold 行（与 <code>speed-check-mode none</code> 矛盾，属空操作）。</p>
+</div>
+
+<div class="panel">
+<h3><span class="tag p4">P4</span> 死上游超时期间持有 permit（由 P0 顺带解决）</h3>
+<div class="fileref">dns_client.rs · L646 + L649</div>
+<p><code>semaphore.acquire()</code> 拿到 permit 后，在 <code>timeout(3s)</code> 等待期间一直持有。死上游会占满其 1/12 的并发槽位达 3s；持续负载下每波最多 12 个后台 task 挂死。因上限 12，<b>不影响客户端延迟</b>，但浪费且会触发 <code>resource too busy</code>。<b>P0 的熔断会让死上游被跳过，此问题自然消失。</b></p>
+</div>
+
+<div class="panel">
+<h3><span class="tag p4">P5</span> <code>NameServerGroup</code> 总是 fan-out 到全部上游（设计如此，P0 缓解）</h3>
+<p><code>fastest-response</code> 需要多个响应来挑最快，全打是预期行为。P0 熔断后死的会被跳过；已知慢的（如 <code>reitmeier</code> ~2s）仍每次都打，可接受。</p>
+</div>
+
+<h2>3. 运维层发现（非代码 bug，但直接影响性能）</h2>
+
+<div class="panel">
+<h3><span class="tag ops">运维</span> 同时运行了两个 smartdns 实例，共享端口与缓存文件</h3>
+<div class="fileref">当前进程：PID 2260（07-07 23:52:54 启动，我昨晚后台遗留）+ PID 96096（08-08 08:25:26 启动，你今早启动）</div>
+<p>两者都 <code>LISTENING</code> 在 <b>9053 / 8083</b>（smartdns 启用 <code>SO_REUSEPORT</code> 允许端口复用）。后果：</p>
+<ul>
+<li><b>查询被分流</b>到两个进程，行为不一致、难排查；</li>
+<li><b>prefetch 双倍打上游</b> → 上游查询量翻倍 → 更多 3s 超时（这正是"健康上游也开始超时"的放大器）；</li>
+<li><b>共享同一 <code>./data/smartdns.cache</code></b> → 缓存文件损坏风险；日志互相交错。</li>
+</ul>
+<p class="note bad"><b>建议</b>：系统里<b>只保留一个</b> smartdns 实例。最干净的做法是杀掉昨晚遗留的 PID 2260，保留你今早启动的 96096（二者都是带 web-ui 的同一 exe）。需要我执行请确认（属于停止进程操作）。</p>
+</div>
+
+<h2>4. 当前配置审计（smartdns.conf）</h2>
+<table>
+<tr><th>配置项</th><th>当前值</th><th>评价</th></tr>
+<tr><td>上游组</td><td>UDP 223.5.5.5/223.6.6.6/114.114.114.119（含 -b，已去 -e）+ doh.pub + dns.alidns.com(https) + dns.reitmeier.me</td><td class="ok">合理：UDP 兜底 + TCP/TLS DoH</td></tr>
+<tr><td>已剔除</td><td>doh.360.cn（直连死）、doh.flymc.cc（直连死，仅走代理通）、adg.geili.me（双路皆死）</td><td class="ok">正确</td></tr>
+<tr><td>response-mode</td><td>fastest-response</td><td class="ok">与 speed-check-mode none 自洽</td></tr>
+<tr><td>force-aaaa-soa</td><td>yes</td><td class="ok">本机 IPv6 不佳时避免 AAAA 长等</td></tr>
+<tr><td>cache-size / prefetch / serve-expired</td><td>65536 / yes / yes(ttl 604800)</td><td class="ok">功能正常；prefetch 扫描效率见 P1</td></tr>
+<tr><td>dualstack-ip-selection</td><td>已删除（保留 speed-check-mode none）</td><td class="ok">矛盾配置已清理（P3）</td></tr>
+</table>
+
+<h2>5. 下一步建议（按优先级）</h2>
+<table>
+<tr><th>优先级</th><th>动作</th><th>是否需重编译</th></tr>
+<tr><td><span class="tag p0">P0</span></td><td>实现上游熔断（连续失败计数 + 冷却跳过）</td><td class="ok">✅ 已实现（dns_client.rs）</td></tr>
+<tr><td><span class="tag ops">运维</span></td><td>收敛为单个 smartdns 实例</td><td class="ok">✅ 待部署时执行（停多余进程）</td></tr>
+<tr><td><span class="tag p1">P1</span></td><td>prefetch 扫描改为按过期时间的就绪队列</td><td class="ok">✅ 已实现（dns_mw_cache.rs）</td></tr>
+<tr><td><span class="tag p3">P3</span></td><td>删除矛盾的 <code>dualstack-ip-selection yes</code></td><td class="ok">✅ 已删除（conf）</td></tr>
+<tr><td><span class="tag p2">P2</span></td><td>缓存分片锁（高 QPS 才需要）</td><td class="ok">✅ 已实现（dns_mw_cache.rs）</td></tr>
+</table>
+
+<div class="note info">说明：2026-07-08 用户确认"优化全部优化点"，已落地 P0/P1/P2/P3 代码改动 + 配置清理。<b>状态：代码已改，正在重新带 <code>--features web-ui</code> 编译并部署；部署后需验证 WebUI 与 DNS 解析。</b></div>
+
+<div class="footer">
+相关代码：<span class="mono">src/dns_client.rs</span> · <span class="mono">src/dns_mw_cache.rs</span> · <span class="mono">src/dns_mw_dualstack.rs</span> · <span class="mono">src/dns_mw_ns.rs</span><br>
+部署约定与构建命令已固化于项目记忆 <span class="mono">.workbuddy/memory/MEMORY.md</span>。
+</div>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>缓存命中率核查报告 V3（最终）</title>
+<style>
+  :root {
+    --bg: #0f1419; --panel: #1a2029; --panel2: #232b36; --border: #2c3644;
+    --txt: #e6edf3; --muted: #93a1b0; --accent: #58a6ff; --green: #3fb950;
+    --red: #f85149; --yellow: #d29922; --mono: "SF Mono", "Cascadia Code", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--txt);
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; line-height: 1.65; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 32px 24px 64px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 14px; margin-bottom: 28px; }
+  h2 { font-size: 19px; margin: 36px 0 14px; padding-left: 10px; border-left: 3px solid var(--accent); }
+  h3 { font-size: 15px; margin: 22px 0 8px; color: var(--accent); }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 18px 20px; margin: 14px 0; }
+  .key { background: var(--panel2); border: 1px solid var(--border); border-left: 4px solid var(--green);
+    border-radius: 8px; padding: 16px 18px; margin: 16px 0; font-size: 15px; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 14px; }
+  th, td { border: 1px solid var(--border); padding: 9px 11px; text-align: left; }
+  th { background: var(--panel2); color: var(--muted); font-weight: 600; }
+  td code, .mono { font-family: var(--mono); font-size: 12.5px; color: #c9d1d9; }
+  .ok { color: var(--green); font-weight: 700; }
+  .bad { color: var(--red); font-weight: 700; }
+  .warn { color: var(--yellow); font-weight: 700; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px,1fr)); gap: 12px; margin: 14px 0; }
+  .stat { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 14px; text-align: center; }
+  .stat .n { font-size: 22px; font-weight: 700; }
+  .stat .l { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  pre { background: #0b0f14; border: 1px solid var(--border); border-radius: 8px; padding: 14px;
+    overflow-x: auto; font-family: var(--mono); font-size: 12.5px; color: #c9d1d9; }
+  .tag { display: inline-block; padding: 2px 9px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+  .tag.g { background: rgba(63,185,80,.15); color: var(--green); }
+  .tag.r { background: rgba(248,81,73,.15); color: var(--red); }
+  .tag.y { background: rgba(210,153,34,.15); color: var(--yellow); }
+  .foot { margin-top: 40px; padding-top: 18px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>缓存命中率核查报告（V3 · 最终）</h1>
+  <div class="sub">项目：smartdns-rs · 诊断日期：2026-07-09 ~ 07-10 · 作者：AI 排查</div>
+
+  <div class="key">
+    <b>结论先行：</b>WebUI 的命中率<b>计算公式没有错</b>，44% 是真实值；真正拉低它的是
+    <b>「否定缓存（negative caching）缺失」</b>。原版 smartdns 把 NXDOMAIN/NODATA 也缓存起来，
+    而本分支 `dns_mw_cache.rs` 那段逻辑被注释掉了。修复已实现并通过编译，命中率预计可回到 90%+ 量级。
+  </div>
+
+  <h2>1. 实时数据核对（运行中服务）</h2>
+  <div class="grid">
+    <div class="stat"><div class="n">43.8%</div><div class="l">界面命中率</div></div>
+    <div class="stat"><div class="n">9,106</div><div class="l">总查询 total_queries</div></div>
+    <div class="stat"><div class="n">3,988</div><div class="l">命中 cache_query_hits</div></div>
+    <div class="stat"><div class="n">5,118</div><div class="l">未命中 cache_miss_queries</div></div>
+  </div>
+  <div class="card">
+    <b>公式自洽验证：</b><code class="mono">cache_query_hits / total_queries = 3988 / 9106 = 43.8%</code>，
+    且 <code class="mono">3988 + 5118 = 9106</code> ✅ —— 把分母改成「命中+未命中」不会改变这个数字，
+    公式 <code class="mono">src/api/stats.rs</code> 与上游 smartdns-rs 一致，<b>本身正确</b>。
+    <br/><br/>
+    <b>界面上那个 <span class="tag r">易误导</span> 的 <code class="mono">cache_hits = 1,080,460</code> 字段：</b>
+    它是「所有缓存条目各自命中计数之和、跨重启累加」，和 <code class="mono">total_queries</code> 根本不可比。
+    这极可能是让你觉得「该有 90%」的来源 —— 但它只是展示项，不影响真实命中率计算。
+  </div>
+
+  <h2>2. 受控实测：缓存机制到底正不正常</h2>
+  <p>逐个直连 <code class="mono">127.0.0.1:9053</code> 发 UDP 查询，观察命中计数器变化：</p>
+  <table>
+    <thead><tr><th>实验</th><th>方法</th><th>结果</th><th>结论</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>正向缓存</td>
+        <td>5 个真实域名各查 2 次</td>
+        <td class="ok">第二次 100% 命中（counter +5）</td>
+        <td>基础缓存正常</td>
+      </tr>
+      <tr>
+        <td>serve-expired</td>
+        <td>24 个已过期条目（年龄 1100~1800s，远超其 71~300s TTL）各查 1 次</td>
+        <td class="ok">83% 命中（20/24）</td>
+        <td>7 天陈旧窗口生效，<b>600s 硬上限被掩盖，非主因</b></td>
+      </tr>
+      <tr>
+        <td><b>否定缓存</b></td>
+        <td><code class="mono">rdelivery.qq.com</code> AAAA（已知 NXDOMAIN）查 2 次</td>
+        <td class="bad">miss +2、hit +0</td>
+        <td><b>否定响应完全不缓存 ❌ 根因在此</b></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>3. 流量构成：为什么否定查询这么多</h2>
+  <div class="card">
+    解析最近 1 小时<b>真实客户端</b>审计日志（排除后台预取）：
+    <div class="grid" style="margin-top:10px">
+      <div class="stat"><div class="n">47.1%</div><div class="l">否定应答（NXDOMAIN/NODATA）</div></div>
+      <div class="stat"><div class="n">~52.9%</div><div class="l">正向应答</div></div>
+      <div class="stat"><div class="n">97.5%</div><div class="l">若否定也缓存的「理论上限」命中率</div></div>
+    </div>
+    否定应答里绝大多数是<b>双栈域名的 AAAA 查询无 AAAA 记录</b>（如 <code class="mono">www.doubao.com AAAA → NXDOMAIN</code>）。
+    原版 smartdns 按 SOA 的 TTL 缓存这些否定结果，重复查询直接命中；本分支每次都重新解析 → 全计为 miss。
+    这正是 44% vs 90% 的差距来源。
+  </div>
+
+  <h2>4. 已实施的修复</h2>
+  <h3>4.1 <code class="mono">src/dns_mw_cache.rs</code></h3>
+  <pre>// 新增：对 NXDOMAIN / NODATA 响应缓存（否定缓存）
+fn insert_negative(&self, query, group, res) {
+    let ttl = res.soa_minimum_ttl().clamp(60, 3600);   // 限幅 60s~3600s
+    self.cache.insert_records_negative(query, group, ttl, Instant::now()).await;
+}
+// handle() 的 Ok(lookup) 分支：在原有正向缓存之前，先判断是否否定应答
+//   - NXDOMAIN / NODATA  → insert_negative()
+//   - SERVFAIL / REFUSED → 不缓存（保持原行为）
+// get() 命中否定条目 → 原样返回 + mark_from_cache() + query_hits+1
+//   否定条目不进 prefetch_heap（无需刷新）</pre>
+  <h3>4.2 <code class="mono">src/dns_conf.rs</code> + <code class="mono">src/config/cache.rs</code></h3>
+  <pre>// CacheConfig 新增字段
+pub cache_negative: Option&lt;bool&gt;,
+// 解析器
+pub fn cache_negative(&self) -> bool { self.cache.cache_negative.unwrap_or(true) }</pre>
+  <h3>4.3 <code class="mono">smartdns.conf</code></h3>
+  <pre>cache-negative yes   # 显式开启否定缓存（对齐原版 smartdns）</pre>
+  <p><span class="tag g">状态</span> <code class="mono">cargo check --features web-ui</code> 通过；release exe 已于 2026-07-10 00:57 构建完成（v0.13.1）。部署新 exe 后否定缓存即生效。</p>
+
+  <h2>5. 关于「600s TTL 硬上限」是否有必要增大</h2>
+  <div class="card">
+    <p><b>结论：在现有 <code class="mono">serve-expired yes</code> 配置下，<span class="tag y">对命中率而言没有必要增大</span>；但作为「减少上游预取抖动」的可选优化，建议后续补一个 <code class="mono">cache-max-ttl</code> 配置项。</b></p>
+    <p>现状：<code class="mono">insert</code> 把每条缓存条目 TTL 硬封顶 <code class="mono">min(600, record_ttl)</code>。原版 smartdns 尊重记录自然 TTL（常达数小时）。</p>
+    <ul>
+      <li><b>命中率角度</b>：过期条目由 <code class="mono">serve-expired</code>（7 天窗口）兜底返回，实测 83% 仍命中（见 §2）。所以 600s 上限<b>不影响命中率</b>，本次不动它。</li>
+      <li><b>上游负载角度</b>：600s 上限让条目比原版更早过期 → 更频繁触发后台 prefetch 刷新（实测 <code class="mono">bg_total_queries=5443</code>），增加上游查询与 CPU 抖动。</li>
+      <li><b>建议</b>：若想更贴近原版、减少预取抖动，应补 <code class="mono">cache-max-ttl</code> 配置（默认 0 = 用记录自然 TTL），而非写死更大魔数。已记入后续待办，<b>本次不纳入</b>（保持改动聚焦、避免重新构建验证范围扩大）。</li>
+    </ul>
+  </div>
+
+  <h2>6. 后续可选优化（未做）</h2>
+  <table>
+    <thead><tr><th>项</th><th>说明</th><th>优先级</th></tr></thead>
+    <tbody>
+      <tr><td>cache-max-ttl 配置</td><td>替代 600s 硬上限，默认尊重自然 TTL，减少预取抖动</td><td class="warn">可选</td></tr>
+      <tr><td>界面 cache_hits 字段</td><td>改名/改为「本次运行命中数」，消除与 total_queries 的混淆</td><td class="warn">可选</td></tr>
+      <tr><td>P0 熔断 / P1 就绪队列 / P2 分片锁</td><td>见 PERFORMANCE_REVIEW.html，已在上轮实现</td><td class="ok">已完成</td></tr>
+    </tbody>
+  </table>
+
+  <div class="foot">
+    附：诊断用临时脚本（audit_analysis.py / dns_probe*.py / caches.json）已清理，不进仓库；
+    本报告与 PERFORMANCE_REVIEW.html 一并提交归档。
+  </div>
+</div>
+</body>
+</html>
