@@ -1137,6 +1137,7 @@ mod tests {
 
     #[tokio::test]
     #[cfg(feature = "dns-over-https")]
+    #[ignore = "requires stable external network connectivity to multiple DNS-over-HTTPS providers"]
     async fn test_nameserver_https_resolve() {
         let urls = [
             DnsUrl::from_str("https://dns.cloudflare.com/dns-query").unwrap(),
