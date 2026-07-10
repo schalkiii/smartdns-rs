@@ -429,6 +429,26 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
                 Ok(lookup)
             }
             Err(err) => {
+                // 否定响应缓存（NODATA / NXDOMAIN）：
+                // 上游"无记录"以 Err(NoRecordsFound) 形式上浮，否定响应承载在错误中而非 Ok 分支，
+                // 因此必须在错误分支构造并缓存，否则第 2 次查询仍会打到上游且无法计为缓存命中。
+                if !ctx.no_cache && ctx.cfg().cache_negative() {
+                    if let Some(neg_resp) = negative_response_from_error(&err, &query) {
+                        let neg_ttl = negative_ttl(&neg_resp);
+                        self.cache
+                            .insert_negative(
+                                query.clone(),
+                                neg_resp.clone(),
+                                neg_ttl,
+                                ctx.server_group_name(),
+                                Instant::now(),
+                            )
+                            .await;
+                        // 注意：首次命中（上游已查、刚写入否定缓存）不计为缓存命中，
+                        // 也不标记 from_cache —— 与正向缓存一致（只有第 2 次从缓存返回才计命中）。
+                        return Ok(neg_resp);
+                    }
+                }
                 // fallback to expired result.
                 if let Some(res) = cached_res {
                     return Ok(res);
@@ -464,6 +484,22 @@ fn negative_ttl(resp: &DnsResponse) -> Duration {
         }
     }
     Duration::from_secs(ttl.min(3600))
+}
+
+/// 从否定错误（NXDOMAIN / NODATA）构造可缓存的否定 `DnsResponse`。
+///
+/// 与 `app.rs` 最终的错误→响应转换逻辑保持一致：
+/// - `NXDOMAIN`：返回 `NXDOMAIN` 响应码（域名不存在）。
+/// - `NODATA` 且携带 SOA：返回 `NOERROR` + SOA 权威段。
+/// - 其余（无 SOA 的 referral / 普通失败）：返回 `None`，不缓存
+///   （RFC 2308 指出无 SOA 的否定响应不应缓存，避免否定响应无限循环）。
+fn negative_response_from_error(err: &DnsError, query: &Query) -> Option<DnsResponse> {
+    if err.is_nx_domain() {
+        let mut res = DnsResponse::new_with_max_ttl(query.to_owned(), Vec::new());
+        res.set_response_code(ResponseCode::NXDomain);
+        return Some(res);
+    }
+    err.as_soa(query)
 }
 
 struct DomainPrefetchingNotify {
@@ -572,12 +608,22 @@ impl DnsCache {
         expired_ttl: u64,
         expired_reply_ttl: u64,
     ) -> Self {
-        // 每片容量至少 1，保证总容量不低于 cache_size。
-        let per_shard = (cache_size / CACHE_SHARD_COUNT).max(1);
-        let shards = (0..CACHE_SHARD_COUNT)
-            .map(|_| {
+        // 选择分片数：当配置容量小于分片数时退化为单分片，
+        // 避免每片容量被钳制到 1 后同片键互相驱逐（命中率下降 / 单测失败）。
+        let shard_count = if cache_size >= CACHE_SHARD_COUNT {
+            CACHE_SHARD_COUNT
+        } else {
+            1
+        };
+        // 将总容量尽量均摊到各分片，并把余数分摊到前 `cache_size % shard_count` 个分片，
+        // 保证各分片容量 >= 1 且总容量 >= cache_size。
+        let per_shard = (cache_size / shard_count).max(1);
+        let remainder = cache_size.saturating_sub(per_shard * shard_count);
+        let shards = (0..shard_count)
+            .map(|i| {
+                let cap = per_shard + if i < remainder { 1 } else { 0 };
                 Arc::new(Mutex::new(LruCache::new(
-                    NonZeroUsize::new(per_shard).unwrap(),
+                    NonZeroUsize::new(cap).unwrap(),
                 )))
             })
             .collect();
@@ -669,7 +715,7 @@ impl DnsCache {
                 let count = entries.len();
                 for entry in entries {
                     let query = entry.data.query().clone();
-                    let idx = shard_index_of(&query, CACHE_SHARD_COUNT);
+                    let idx = shard_index_of(&query, self.shards.len());
                     self.shards[idx]
                         .lock()
                         .await
@@ -742,7 +788,7 @@ impl DnsCache {
         let lookup = DnsResponse::new_with_deadline(query.clone(), records, valid_until)
             .with_name_server_group(name_server_group.to_string());
 
-        let idx = shard_index_of(&query, CACHE_SHARD_COUNT);
+        let idx = shard_index_of(&query, self.shards.len());
         {
             let mut shard = self.shards[idx].lock().await;
             if let Some(entry) = shard.get_mut(&query) {
@@ -783,7 +829,7 @@ impl DnsCache {
         // 将应答区记录的 TTL 限幅到否定 TTL 范围内，避免向下游返回过大的 TTL。
         resp.set_max_ttl(ttl.as_secs() as u32);
 
-        let idx = shard_index_of(&query, CACHE_SHARD_COUNT);
+        let idx = shard_index_of(&query, self.shards.len());
         let mut shard = self.shards[idx].lock().await;
         if let Some(entry) = shard.get_mut(&query) {
             entry.data = resp.clone();
@@ -884,7 +930,7 @@ impl DnsCache {
 
     /// Based on the query, see if there are any records available
     async fn get(&self, query: &Query, now: Instant) -> Option<(DnsResponse, CacheStatus)> {
-        let idx = shard_index_of(query, CACHE_SHARD_COUNT);
+        let idx = shard_index_of(query, self.shards.len());
         let mut guard = self.shards[idx].lock().await;
 
         guard.get_mut(query).map(|value| {
@@ -957,7 +1003,7 @@ impl DnsCache {
             }
             heap.pop();
 
-            let idx = shard_index_of(&query, CACHE_SHARD_COUNT);
+            let idx = shard_index_of(&query, self.shards.len());
             let mut guard = self.shards[idx].lock().await;
             let entry = match guard.get_mut(&query) {
                 Some(e) => e,
