@@ -432,22 +432,23 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
                 // 否定响应缓存（NODATA / NXDOMAIN）：
                 // 上游"无记录"以 Err(NoRecordsFound) 形式上浮，否定响应承载在错误中而非 Ok 分支，
                 // 因此必须在错误分支构造并缓存，否则第 2 次查询仍会打到上游且无法计为缓存命中。
-                if !ctx.no_cache && ctx.cfg().cache_negative() {
-                    if let Some(neg_resp) = negative_response_from_error(&err, &query) {
-                        let neg_ttl = negative_ttl(&neg_resp);
-                        self.cache
-                            .insert_negative(
-                                query.clone(),
-                                neg_resp.clone(),
-                                neg_ttl,
-                                ctx.server_group_name(),
-                                Instant::now(),
-                            )
-                            .await;
-                        // 注意：首次命中（上游已查、刚写入否定缓存）不计为缓存命中，
-                        // 也不标记 from_cache —— 与正向缓存一致（只有第 2 次从缓存返回才计命中）。
-                        return Ok(neg_resp);
-                    }
+                if !ctx.no_cache
+                    && ctx.cfg().cache_negative()
+                    && let Some(neg_resp) = negative_response_from_error(&err, &query)
+                {
+                    let neg_ttl = negative_ttl(&neg_resp);
+                    self.cache
+                        .insert_negative(
+                            query.clone(),
+                            neg_resp.clone(),
+                            neg_ttl,
+                            ctx.server_group_name(),
+                            Instant::now(),
+                        )
+                        .await;
+                    // 注意：首次命中（上游已查、刚写入否定缓存）不计为缓存命中，
+                    // 也不标记 from_cache —— 与正向缓存一致（只有第 2 次从缓存返回才计命中）。
+                    return Ok(neg_resp);
                 }
                 // fallback to expired result.
                 if let Some(res) = cached_res {
@@ -622,9 +623,7 @@ impl DnsCache {
         let shards = (0..shard_count)
             .map(|i| {
                 let cap = per_shard + if i < remainder { 1 } else { 0 };
-                Arc::new(Mutex::new(LruCache::new(
-                    NonZeroUsize::new(cap).unwrap(),
-                )))
+                Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(cap).unwrap())))
             })
             .collect();
 
