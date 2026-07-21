@@ -22,6 +22,23 @@
 
 **说明**：命中率公式 `cache_query_hits / total_queries` 本身正确（`hits + misses == total` 自洽）；界面 `cache_hits` 字段为各条目命中计数之和（跨重启累加），与 `total_queries` 不可比，仅为展示用，不影响真实命中率。
 
+### fix(dns_mw_cache): 修复双栈 NODATA（CNAME+SOA）响应漏缓存导致命中率偏低
+
+**问题**：即便已恢复否定缓存，Web UI 命中率仍长期停在 ~76%，明显低于原版 smartdns 的 90%+。
+
+**根因**：`is_negative_response()` 将 NODATA 判定为「`NoError` 且**应答区为空**」。但双栈域名的 AAAA 查询在只返回 `CNAME + SOA`（无 AAAA 记录）时，应答区**非空**（含 CNAME），于是：
+1. 阴性判定不满足 → 阴性缓存分支绕过；
+2. `handle()` 的 bypass 分支（应答里没有与查询类型匹配的记录）又直接跳过缓存。
+两道关卡叠加，这类高频 NODATA 响应**永不进缓存**，每次都打到上游。这正是原版会缓存、本分支漏掉的那 ~14 个百分点。
+
+**修复**：将 NODATA 判定改为 RFC 2308 定义——「`NoError` 且**应答区没有查询类型的记录**」（如 AAAA 查询无 AAAA，仅有 CNAME 亦算 NODATA）。`is_negative_response(resp, query)` 现在接收原始 `Query` 以比对记录类型；`handle()` 中性判定位于 bypass 之前，故 CNAME+NODATA 会在 bypass 前被当作阴性响应缓存。`insert_negative()` 存的是完整 `DnsResponse`（含 CNAME+SOA），命中时原样返回，不留破损响应。
+
+**验证**（直连 127.0.0.1:9053 受控实测）：
+- 修复前：`www.csdn.net` / `www.oschina.net` AAAA（仅返回 CNAME）查 2 次，第 2 次仍 55~69ms（打到上游），不计入命中 ❌
+- 修复后：第 2 次应 <5ms（缓存命中）✅（由 `test_is_negative_response_cname_nodata` 单元测试锁定）
+
+**说明**：实测家庭网络中此类双栈 NODATA 占否定应答的绝大部分，修复后稳态命中率应接近原版 90%+ 量级。
+
 ### fix(dns_mw_addr): 修复 AddressMiddleware 重建响应丢失 from_cache 标记
 
 **问题**：Web UI 仪表盘显示矛盾的缓存统计——命中率显示 76.6%（4414 命中 / 5766 总查询），但下方却显示"0 命中 + 5766 未命中"、"缓存命中耗时 0.0ms（0 次命中）"、"上游查询耗时 1290.5ms（5766 次未命中）"。

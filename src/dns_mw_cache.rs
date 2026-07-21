@@ -321,7 +321,7 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
                     match status {
                         CacheStatus::Valid => {
                             // 否定缓存条目无需主动刷新（不进入 prefetch 就绪堆）。
-                            if !is_negative_response(&res) {
+                            if !is_negative_response(&res, &query) {
                                 self.try_prefetch(&query, ctx.server_group_name());
                             }
 
@@ -340,7 +340,7 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
                         }
                         CacheStatus::Expired if ctx.cfg().serve_expired() && !no_serve_expired => {
                             // 否定缓存条目无需主动刷新（不进入 prefetch 就绪堆）。
-                            if !is_negative_response(&res) {
+                            if !is_negative_response(&res, &query) {
                                 self.try_prefetch(&query, ctx.server_group_name());
                             }
 
@@ -370,7 +370,7 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
                 // 否定响应（NXDOMAIN / NODATA）缓存：这类响应在家庭网络中占比很高
                 // （尤其是双栈域名的 AAAA 查询，常常无 AAAA 记录而返回否定应答），
                 // 原版 smartdns 默认缓存之，可显著提升缓存命中率。
-                if !ctx.no_cache && ctx.cfg().cache_negative() && is_negative_response(&lookup) {
+                if !ctx.no_cache && ctx.cfg().cache_negative() && is_negative_response(&lookup, &query) {
                     let neg_ttl = negative_ttl(&lookup);
                     self.cache
                         .insert_negative(
@@ -463,13 +463,20 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
 /// 判断响应是否为"否定响应"，可被安全地缓存一段时长。
 ///
 /// - `NXDOMAIN`：域名不存在。
-/// - `NOERROR` 且应答区为空（NODATA）：域名存在但不含所查询类型的记录，典型如双栈域名的 AAAA 查询。
+/// - `NODATA`：域名存在但不含所查询类型的记录。典型场景是双栈域名的 AAAA 查询，
+///   上游常返回 `CNAME` + `SOA`（无 AAAA 记录），应答区**非空**（含 CNAME），
+///   但没有任何 AAAA 记录——这正是 RFC 2308 定义的 NODATA。因此不能以"应答区为空"
+///   判定，而应以"应答区不含查询类型的记录"判定，否则这类高频响应会被漏缓存，
+///   导致命中率显著低于原版 smartdns。
 ///
 /// `SERVFAIL` / `REFUSED` 等错误响应不缓存，避免掩盖上游故障。
-fn is_negative_response(resp: &DnsResponse) -> bool {
+fn is_negative_response(resp: &DnsResponse, query: &Query) -> bool {
     match resp.response_code() {
         ResponseCode::NXDomain => true,
-        ResponseCode::NoError => resp.answers().is_empty(),
+        ResponseCode::NoError => !resp
+            .answers()
+            .iter()
+            .any(|r| r.record_type() == query.query_type()),
         _ => false,
     }
 }
@@ -1345,6 +1352,59 @@ mod tests {
 
         assert_eq!(&lookups[0].data, &lookup2[0].data);
         assert_eq!(&lookups[1].data, &lookup2[1].data);
+    }
+
+    #[test]
+    fn test_is_negative_response_cname_nodata() {
+        let name: Name = "www.example.com.".parse().unwrap();
+        let aaaa_q = Query::query(name.clone(), RecordType::AAAA);
+        let cname_q = Query::query(name.clone(), RecordType::CNAME);
+
+        // AAAA 查询，应答仅含一条 CNAME（无 AAAA）→ 典型双栈 NODATA，应判为否定。
+        // 修复前因 is_negative_response 要求"应答区为空"，漏判此类高频响应，导致命中率偏低。
+        let cname_target: Name = "target.example.com.".parse().unwrap();
+        let cname = Record::from_rdata(
+            name.clone(),
+            60,
+            RData::CNAME(CNAME(cname_target)),
+        );
+        let mut resp = DnsResponse::new_with_max_ttl(aaaa_q.clone(), vec![cname]);
+        resp.set_response_code(ResponseCode::NoError);
+        assert!(
+            is_negative_response(&resp, &aaaa_q),
+            "AAAA 查询仅返回 CNAME 应判为 NODATA 否定响应"
+        );
+
+        // 同一应答，若查询类型恰为 CNAME，则存在匹配记录，不是否定
+        assert!(
+            !is_negative_response(&resp, &cname_q),
+            "CNAME 查询命中 CNAME 应答，不应判为否定"
+        );
+
+        // AAAA 查询且应答含 AAAA → 不是否定
+        let aaaa = Record::from_rdata(name.clone(), 60, RData::AAAA("::1".parse().unwrap()));
+        let mut resp_aaaa = DnsResponse::new_with_max_ttl(aaaa_q.clone(), vec![aaaa]);
+        resp_aaaa.set_response_code(ResponseCode::NoError);
+        assert!(
+            !is_negative_response(&resp_aaaa, &aaaa_q),
+            "AAAA 应答不应判为否定"
+        );
+
+        // 空应答 NODATA
+        let mut resp_empty = DnsResponse::new_with_max_ttl(aaaa_q.clone(), vec![]);
+        resp_empty.set_response_code(ResponseCode::NoError);
+        assert!(
+            is_negative_response(&resp_empty, &aaaa_q),
+            "空应答 NODATA 应判为否定"
+        );
+
+        // NXDOMAIN
+        let mut resp_nx = DnsResponse::new_with_max_ttl(aaaa_q.clone(), vec![]);
+        resp_nx.set_response_code(ResponseCode::NXDomain);
+        assert!(
+            is_negative_response(&resp_nx, &aaaa_q),
+            "NXDOMAIN 应判为否定"
+        );
     }
 
     #[tokio::test]
