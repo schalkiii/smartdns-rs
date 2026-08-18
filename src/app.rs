@@ -158,7 +158,7 @@ impl App {
         time_ns as f64 / total as f64 / 1_000_000.0
     }
 
-    pub async fn add_stats_snapshot(&self, cache_hits: u64) {
+    pub async fn add_stats_snapshot(&self, query_hits: u64) {
         let mut history = self.stats_history.lock().await;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -168,7 +168,7 @@ impl App {
         history.push(StatsSnapshot {
             timestamp: now,
             total_queries: total,
-            cache_hits,
+            cache_hits: query_hits,
         });
         if history.len() > 120 {
             history.remove(0);
@@ -345,11 +345,6 @@ pub fn serve(cfg: Arc<RuntimeConfig>) {
 
             let mut inner_join_set = JoinSet::new();
 
-            let mut last_activity = Instant::now();
-
-            const MAX_IDLE: Duration = Duration::from_secs(30 * 60); // 30 min
-            const MAX_BACKGROUND_QUEUE: usize = 16;
-
             const BATCH_SIZE: usize = 256;
 
             let background_concurrency = Arc::new(Semaphore::new(4));
@@ -381,11 +376,11 @@ pub fn serve(cfg: Arc<RuntimeConfig>) {
                 while let Some((message, server_opts, sender)) = requests.pop() {
                     let handler = handler.clone();
                     let app = app.clone();
-                    if server_opts.is_background
-                        && Instant::now() - last_activity < MAX_IDLE
-                        && bg_batch.len() < MAX_BACKGROUND_QUEUE
-                    {
-                        let app = app.clone();
+                    if server_opts.is_background {
+                        // 背景（预取）请求统一进入 bg_batch，由 background_concurrency(4) 限流。
+                        // 早期实现曾在「空闲 30min」或队列满时丢弃背景请求，导致 sender
+                        // 永久等待、active_queries 计数泄漏；现改为始终处理（让缓存保持新鲜，
+                        // 且空闲期预取开销可忽略）。
                         bg_batch.push(async move {
                             let start = Instant::now();
                             let (result, _from_cache) =
@@ -394,8 +389,7 @@ pub fn serve(cfg: Arc<RuntimeConfig>) {
                                 .fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
                             let _ = sender.send(result);
                         });
-                    } else if !server_opts.is_background {
-                        last_activity = Instant::now();
+                    } else {
                         batch.push(async move {
                             let start = Instant::now();
                             let (result, from_cache) = process(handler, message, server_opts).await;
@@ -581,20 +575,41 @@ async fn process(
                                 from_cache,
                             )
                         }
-                        OpCode::Status => todo!(),
-                        OpCode::Notify => todo!(),
-                        OpCode::Update => todo!(),
-                        OpCode::Unknown(_) => todo!(),
+                        OpCode::Status | OpCode::Notify | OpCode::Update | OpCode::Unknown(_) => {
+                            log::debug!(
+                                "unsupported op code {:?} from {}",
+                                request.op_code(),
+                                addr
+                            );
+                            let mut response_header =
+                                Header::response_from_request(request.header());
+                            response_header.set_response_code(ResponseCode::NotImp);
+                            let mut response_message = Message::query().to_response();
+                            response_message.set_header(response_header);
+                            (SerialMessage::raw(response_message, addr, protocol), false)
+                        }
                     }
                 }
-                MessageType::Response => todo!(),
+                MessageType::Response => {
+                    log::debug!("unexpected response message as query from {}", addr);
+                    let mut response_header = Header::response_from_request(request.header());
+                    response_header.set_response_code(ResponseCode::Refused);
+                    let mut response_message = Message::query().to_response();
+                    response_message.set_header(response_header);
+                    (SerialMessage::raw(response_message, addr, protocol), false)
+                }
             }
         }
         Err(ProtoError { kind, .. }) if kind.as_form_error().is_some() => {
             // We failed to parse the request due to some issue in the message, but the header is available, so we can respond
-            let (request_header, error) = kind
-                .into_form_error()
-                .expect("as form_error already confirmed this is a FormError");
+            let (request_header, error) = match kind.into_form_error() {
+                Ok(form_error) => form_error,
+                // 匹配守卫已确认存在，正常不会到达；保守返回空响应而非 panic。
+                Err(_) => {
+                    log::debug!("form_error vanished after guard; dropping malformed request");
+                    return (SerialMessage::raw(Message::query(), addr, protocol), false);
+                }
+            };
 
             // debug for more info on why the message parsing failed
             log::debug!(

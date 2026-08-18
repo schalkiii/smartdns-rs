@@ -156,9 +156,10 @@ impl ResolveCommand {
         let mut global_server = None;
 
         for arg in itr.into_iter().skip(1).map(Into::<OsString>::into) {
-            let arg = arg
-                .into_string()
-                .expect("Failed to convert OsString to String");
+            let arg = match arg.into_string() {
+                Ok(s) => s,
+                Err(_) => return Err("argument contains invalid UTF-8".to_string()),
+            };
             if arg == "resolve" {
                 continue;
             }

@@ -8,7 +8,7 @@ pub fn bind_to<T: LocalAddr>(
     bind_addr: SocketAddr,
     bind_device: Option<&str>,
     bind_type: &str,
-) -> T {
+) -> io::Result<T> {
     let device_note = bind_device
         .map(|device| format!("@{device}"))
         .unwrap_or_default();
@@ -24,9 +24,12 @@ pub fn bind_to<T: LocalAddr>(
                 local_addr,
                 device_note
             );
-            socket
+            Ok(socket)
         }
-        Err(err) => panic!("cound not bind to {bind_type}: {bind_addr}, {err}"),
+        Err(err) => {
+            log::error!("could not bind to {bind_type}: {bind_addr}, {err}");
+            Err(err)
+        }
     }
 }
 

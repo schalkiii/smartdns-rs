@@ -47,10 +47,11 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsAuditMiddl
 
         // debug!("{}", audit.to_string_without_date());
 
-        self.audit_sender
-            .send(audit)
-            .await
-            .unwrap_or_else(|err| warn!("send audit failed,{}", err));
+        // 审计发送不得阻塞请求返回路径：有界通道(容量100)满时直接丢弃（审计允许丢失），
+        // 否则磁盘 IO 缓慢时所有 DNS 响应延迟都会被审计写盘速度拖住。
+        if self.audit_sender.try_send(audit).is_err() {
+            warn!("audit queue full, dropping audit record");
+        }
 
         res
     }
@@ -183,12 +184,11 @@ fn record_audit_to_file(
                 "lookup_source",
             ])?;
 
-            audit_file.set_peamble(Some(
-                writer
-                    .into_inner()
-                    .expect("read csv peamble")
-                    .into_boxed_slice(),
-            ))
+            if let Ok(buf) = writer.into_inner() {
+                audit_file.set_peamble(Some(buf.into_boxed_slice()));
+            } else {
+                warn!("failed to flush csv preamble to audit file");
+            }
         }
 
         let mut writer = csv::Writer::from_writer(audit_file);

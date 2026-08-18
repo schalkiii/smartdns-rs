@@ -23,7 +23,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(nightly)'] }
 
 [features]
 
-default = ["common", "self-update" ]
+default = ["common", "self-update", "web-ui" ]
 
 homebrew = [ "common" ]
 

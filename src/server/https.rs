@@ -45,7 +45,8 @@ pub fn serve(
         let alt_svc = format!(r#"h3=":{port}"; h3-29=":{port}"; ma=86400"#);
         SetResponseHeaderLayer::overriding(
             header::ALT_SVC,
-            HeaderValue::from_str(alt_svc.as_str()).expect("invalid header value"), // TODO: handle error better?
+            HeaderValue::from_str(alt_svc.as_str())
+                .unwrap_or_else(|_| HeaderValue::from_static("")), // TODO: handle error better?
         )
     }));
 

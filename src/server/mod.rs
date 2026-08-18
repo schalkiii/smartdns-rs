@@ -77,7 +77,7 @@ pub fn serve(
                 bind_addr_config.sock_addr(),
                 bind_addr_config.device(),
                 "UDP",
-            );
+            )?;
             udp::serve(socket, dns_handle)
         }
         BindAddrConfig::Tcp(bind_addr_config) => {
@@ -86,7 +86,7 @@ pub fn serve(
                 bind_addr_config.sock_addr(),
                 bind_addr_config.device(),
                 "TCP",
-            );
+            )?;
             tcp::serve(listener, dns_handle, Duration::from_secs(idle_time))
         }
         #[cfg(feature = "dns-over-tls")]
@@ -106,7 +106,7 @@ pub fn serve(
                 bind_addr_config.sock_addr(),
                 bind_addr_config.device(),
                 LISTENER_TYPE,
-            );
+            )?;
 
             tls::serve(
                 listener,
@@ -123,7 +123,7 @@ pub fn serve(
                 bind_addr_config.sock_addr(),
                 bind_addr_config.device(),
                 LISTENER_TYPE,
-            );
+            )?;
 
             let app = app.clone();
 
@@ -146,7 +146,7 @@ pub fn serve(
                 bind_addr_config.sock_addr(),
                 bind_addr_config.device(),
                 LISTENER_TYPE,
-            );
+            )?;
 
             let app = app.clone();
 
@@ -175,7 +175,7 @@ pub fn serve(
                 bind_addr_config.sock_addr(),
                 bind_addr_config.device(),
                 LISTENER_TYPE,
-            );
+            )?;
 
             let app = app.clone();
             h3::serve(app, listener, dns_handle, server_cert_resolver)?
@@ -197,7 +197,7 @@ pub fn serve(
                 bind_addr_config.sock_addr(),
                 bind_addr_config.device(),
                 LISTENER_TYPE,
-            );
+            )?;
 
             quic::serve(
                 listener,

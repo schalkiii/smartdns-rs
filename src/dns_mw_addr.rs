@@ -186,7 +186,7 @@ fn handle_rule_addr(query_type: RecordType, ctx: &DnsContext) -> Option<Vec<RDat
                                 );
                             }
                         }
-                        _ => unreachable!(),
+                        _ => return None,
                     }
                     if !no_rule_soa {
                         return Some(vec![RData::default_soa()]);

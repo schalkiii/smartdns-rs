@@ -73,13 +73,19 @@ pub fn serve(
             inner_join_set.spawn(async move {
                 log::debug!("starting TLS request from: {}", src_addr);
 
-                // perform the TLS
-                let tls_stream = tls_acceptor.accept(tcp_stream).await;
+                // perform the TLS handshake, bounded by the idle timeout so a client
+                // that opens a TCP connection but never completes the handshake cannot
+                // pin a task + socket indefinitely (slowloris-style resource exhaustion).
+                let tls_stream = tokio::time::timeout(timeout, tls_acceptor.accept(tcp_stream)).await;
 
                 let tls_stream = match tls_stream {
-                    Ok(tls_stream) => AsyncIoTokioAsStd(tls_stream),
-                    Err(e) => {
+                    Ok(Ok(tls_stream)) => AsyncIoTokioAsStd(tls_stream),
+                    Ok(Err(e)) => {
                         log::debug!("tls handshake src: {} error: {}", src_addr, e);
+                        return;
+                    }
+                    Err(_) => {
+                        log::debug!("tls handshake src: {} timed out", src_addr);
                         return;
                     }
                 };

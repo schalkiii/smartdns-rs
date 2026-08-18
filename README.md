@@ -225,13 +225,13 @@ SmartDNS-rs includes an embedded web dashboard accessible over HTTP. It provides
 
 ### Enabling the Dashboard
 
-1. **Enable the `web-ui` feature at build time:**
+1. **Enable the `web-ui` feature at build time** (already enabled by default):
 
    ```shell
    cargo build --release --features web-ui
    ```
 
-   Pre-built releases include this feature by default.
+   Pre-built releases and default builds include this feature.
 
 2. **Configure the HTTP listener** in your `smartdns.conf`:
 
@@ -267,11 +267,11 @@ cd smartdns-rs
 # install https://github.com/casey/just
 cargo install just
 
-# build (with web-ui dashboard)
-just build --release --features web-ui
+# build (web-ui dashboard included by default)
+just build --release
 
 # build (without web-ui, minimal binary)
-just build --release
+just build --release --no-default-features
 
 # print help
 ./target/release/smartdns --help

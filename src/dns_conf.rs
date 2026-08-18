@@ -17,7 +17,7 @@ use crate::{
     dns_rule::{DomainRuleMap, DomainRuleTreeNode},
     infra::ipset::IpSet,
     libdns::proto::rr::{Name, RecordType},
-    log::{debug, info, warn},
+    log::{debug, error, info, warn},
     proxy::ProxyConfig,
 };
 
@@ -1034,7 +1034,9 @@ impl RuntimeConfigBuilder {
                 CaPath(v) => self.ca_path = Some(v),
                 ConfFile(v) => {
                     if !self.loaded_files.contains(&v) {
-                        self.load_file(v.clone()).expect("load_file failed");
+                        if let Err(e) = self.load_file(v.clone()) {
+                            error!("failed to load config file {:?}: {}", v, e);
+                        }
                         if let Some(dir) = v.parent() {
                             self.dirs.insert(dir.to_path_buf());
                         }
@@ -1104,7 +1106,7 @@ impl RuntimeConfigBuilder {
             },
             Ok((_, None)) => (),
             Err(err) => {
-                warn!("unknown conf: {}, {:?}", line, err);
+                error!("unknown conf: {}, {:?}", line, err);
             }
         }
     }

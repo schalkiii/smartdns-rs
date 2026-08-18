@@ -9,7 +9,6 @@ use std::hash::{Hash, Hasher};
 use std::io::Read;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
-use std::ops::DerefMut;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,13 +25,12 @@ use crate::{
         op::{Message, Query, ResponseCode},
         rr::DNSClass,
     },
-    log::{debug, error, info},
+    log::{debug, error, info, trace},
     middleware::*,
 };
 use lru::LruCache;
 use tokio::sync::Notify;
-use tokio::sync::{Mutex, RwLock, mpsc};
-use tokio::time::sleep;
+use tokio::sync::{Mutex, mpsc};
 
 #[derive(Clone)]
 pub struct PrefetchTask {
@@ -153,35 +151,33 @@ impl DnsCacheMiddleware {
             // 每次检查最多取 16 条过期记录，防止启动时洪水般涌入 channel
             const PREFETCH_BATCH_SIZE: usize = 16;
             let mut last_check = Instant::now();
+            // 下一次检查的绝对时刻；由扫描循环依据堆中最近过期时间重置。
+            // 使用单次可重置定时器（sleep_until），避免原 notify_after 每次插入派生 detached
+            // sleep 任务导致定时器随运行时间无界累积（性能劣化根因）。
+            let mut next_check = tokio::time::Instant::now();
 
             loop {
-                prefetch_notify.notified().await;
+                // 等待：到达预定检查时刻，或被插入路径立即唤醒。
+                tokio::select! {
+                    _ = tokio::time::sleep_until(next_check) => {}
+                    _ = prefetch_notify.notified() => {}
+                }
 
                 let now = Instant::now();
                 let most_recent;
                 if now - last_check > min_interval {
                     last_check = now;
 
-                    let expired = {
-                        let (expired, most_recent0) = cache
-                            .get_expired(
-                                now,
-                                Some(max_prefetch as u64),
-                                min_interval,
-                                PREFETCH_BATCH_SIZE,
-                            )
-                            .await;
+                    let (expired, most_recent0) = cache
+                        .get_expired(
+                            now,
+                            Some(max_prefetch as u64),
+                            min_interval,
+                            PREFETCH_BATCH_SIZE,
+                        )
+                        .await;
 
-                        debug!(
-                            "[prefetch] check: cache={} entries, elapsed {:?}",
-                            cache.entry_count().await,
-                            now.elapsed()
-                        );
-
-                        most_recent = most_recent0;
-
-                        expired
-                    };
+                    most_recent = most_recent0;
 
                     if !expired.is_empty()
                         && let Some(sender) = sender.as_ref()
@@ -196,7 +192,7 @@ impl DnsCacheMiddleware {
                                 })
                                 .await
                             {
-                                Ok(_) => debug!("[prefetch] queued: {}", query_name),
+                                Ok(_) => trace!("[prefetch] queued: {}", query_name),
                                 Err(_) => {
                                     error!("[prefetch] channel closed");
                                     break;
@@ -208,9 +204,9 @@ impl DnsCacheMiddleware {
                     most_recent = Duration::ZERO;
                 }
 
-                // sleep and wait for next check.
+                // 调度下一次检查：堆中最近过期间隔与最小间隔的较大者，单次可重置定时器。
                 let dura = most_recent.max(min_interval);
-                prefetch_notify.notify_after(dura).await;
+                next_check = tokio::time::Instant::now() + dura;
             }
         });
     }
@@ -223,9 +219,9 @@ impl DnsCacheMiddleware {
                 query: query.clone(),
                 rule_group: Some(server_group_name.to_string()),
             }) {
-                Ok(_) => debug!("[cache] bg-refresh queued: {}", query_name),
+                Ok(_) => trace!("[cache] bg-refresh queued: {}", query_name),
                 Err(mpsc::error::TrySendError::Full(_)) => {
-                    debug!("[cache] queue full, drop bg-refresh: {}", query_name);
+                    trace!("[cache] queue full, drop bg-refresh: {}", query_name);
                 }
                 Err(mpsc::error::TrySendError::Closed(_)) => {
                     error!("[cache] prefetch channel closed");
@@ -321,11 +317,15 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
                     match status {
                         CacheStatus::Valid => {
                             // 否定缓存条目无需主动刷新（不进入 prefetch 就绪堆）。
-                            if !is_negative_response(&res, &query) {
+                            // 仅对剩余 TTL 偏低的条目做命中即预取，避免每个命中都打上游
+                            // （堆驱动预取已覆盖到期刷新，详见 ON_HIT_PREFETCH_REMAINING_TTL）。
+                            if !is_negative_response(&res, &query)
+                                && res.max_ttl().unwrap_or(0) < ON_HIT_PREFETCH_REMAINING_TTL
+                            {
                                 self.try_prefetch(&query, ctx.server_group_name());
                             }
 
-                            debug!(
+                            trace!(
                                 "[cache] hit: {} {} (valid)",
                                 query.name(),
                                 query.query_type()
@@ -340,11 +340,15 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
                         }
                         CacheStatus::Expired if ctx.cfg().serve_expired() && !no_serve_expired => {
                             // 否定缓存条目无需主动刷新（不进入 prefetch 就绪堆）。
-                            if !is_negative_response(&res, &query) {
+                            // serve-stale 条目 TTL 已被改写为过期回复 TTL（远低于门槛），
+                            // 此处一定通过门槛，照常触发后台刷新。
+                            if !is_negative_response(&res, &query)
+                                && res.max_ttl().unwrap_or(0) < ON_HIT_PREFETCH_REMAINING_TTL
+                            {
                                 self.try_prefetch(&query, ctx.server_group_name());
                             }
 
-                            debug!(
+                            trace!(
                                 "[cache] hit: {} {} (expired, serve-stale)",
                                 query.name(),
                                 query.query_type()
@@ -418,12 +422,11 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
                         )
                         .await;
 
-                    if ctx.cfg().prefetch_domain()
-                        && let Some(ttl) = lookup.min_ttl()
-                    {
-                        self.prefetch_notify
-                            .notify_after(Duration::from_secs(ttl as u64))
-                            .await;
+                    if ctx.cfg().prefetch_domain() {
+                        // 仅唤醒预取扫描循环；实际调度由扫描循环依据堆中最近过期时间完成。
+                        // 避免原 notify_after 在每次未命中插入时派生 detached sleep 任务，
+                        // 长期运行后累积成千上万个永不取消的定时器（性能劣化根因）。
+                        self.prefetch_notify.notify_one();
                     }
                 }
                 Ok(lookup)
@@ -510,42 +513,30 @@ fn negative_response_from_error(err: &DnsError, query: &Query) -> Option<DnsResp
     err.as_soa(query)
 }
 
+/// 轻量预取唤醒器：仅用于立即唤醒预取扫描循环，不持有定时器、不派生任务。
+///
+/// 原实现 `notify_after` 在每次调用时 `tokio::spawn` 一个 detached `sleep` 任务，
+/// 长期运行后缓存未命中写入会累积成千上万个永不取消的定时器 future，
+/// 既占用 tokio timer 堆内存，又频繁误唤醒扫描循环（持锁全表扫描），导致性能劣化。
+///
+/// 新设计：
+/// - 插入路径只调用 [`DomainPrefetchingNotify::notify_one`] 立即唤醒扫描循环，零任务派生；
+/// - 扫描循环自行依据堆中最近过期时间用 `sleep_until` 调度下一次检查（单个可重置定时器），
+///   彻底消除定时器泄漏。
 struct DomainPrefetchingNotify {
     notity: Arc<Notify>,
-    tick: RwLock<Instant>,
 }
 
 impl DomainPrefetchingNotify {
     pub fn new() -> Self {
         Self {
             notity: Default::default(),
-            tick: RwLock::new(Instant::now()),
         }
     }
 
-    async fn notify_after(&self, duration: Duration) {
-        if duration.is_zero() {
-            self.notity.notify_one()
-        } else {
-            let tick = *self.tick.read().await;
-            let now = Instant::now();
-            let next_tick = now + duration;
-            if tick > now && next_tick > tick {
-                debug!(
-                    "Domain prefetch check will be performed in {:?}.",
-                    tick - now
-                );
-                return;
-            }
-
-            *self.tick.write().await.deref_mut() = next_tick;
-            debug!("Domain prefetch check will be performed in {:?}.", duration);
-            let notify = self.notity.clone();
-            tokio::spawn(async move {
-                sleep(duration).await;
-                notify.notify_one();
-            });
-        }
+    /// 立即唤醒预取扫描循环（无定时器、无任务派生）。
+    pub fn notify_one(&self) {
+        self.notity.notify_one();
     }
 }
 
@@ -564,6 +555,14 @@ const MAX_TTL: u32 = 86400_u32;
 /// An LRU eviction cache specifically for storing DNS records
 /// 缓存分片数。将单一全局锁拆分为 N 个分片锁，降低高 QPS 下的串行化天花板。
 const CACHE_SHARD_COUNT: usize = 16;
+
+/// 命中即预取（on-hit prefetch）的剩余 TTL 门槛（秒）。
+///
+/// 仅在缓存条目剩余 TTL 低于该值时，才在缓存命中时触发后台刷新。
+/// 堆驱动预取（`get_expired`）已在条目到期时刷新，命中即预取只是补充机制；
+/// 设门槛可避免对每一次命中（尤其是长 TTL 的热域名）都向上游发查询，
+/// 显著削减后台预取查询量，同时不影响"临近过期即刷新"的保鲜效果。
+const ON_HIT_PREFETCH_REMAINING_TTL: u32 = 600;
 
 /// prefetch 就绪堆的键：仅按过期时间 `Instant` 排序（Query 不参与比较，
 /// 因为 hickory 的 Query 未实现 Ord）。用于 BinaryHeap<Reverse<...>> 形成最小堆。
@@ -644,8 +643,8 @@ impl DnsCache {
         }
     }
 
-    /// 缓存条目总数（跨所有分片求和），用于日志与调试。
-    async fn entry_count(&self) -> usize {
+    /// 缓存条目总数（跨所有分片求和），用于日志、调试与统计接口。
+    pub async fn entry_count(&self) -> usize {
         let mut total = 0;
         for shard in &self.shards {
             total += shard.lock().await.len();
@@ -746,6 +745,8 @@ impl DnsCache {
         for shard in &self.shards {
             shard.lock().await.clear();
         }
+        // 同步清空预取就绪堆，否则堆中残留旧 Query 会在下次 get_expired 时才被回收。
+        self.prefetch_heap.lock().await.clear();
     }
 
     pub async fn cached_records(&self) -> Vec<CachedQueryRecord> {
@@ -984,10 +985,13 @@ impl DnsCache {
         base_interval: Duration,
         max_count: usize,
     ) -> (Vec<(Query, Option<String>)>, Duration) {
-        // 只锁定就绪堆，逐个弹出已过期的条目，避免对整张 LruCache 做全表扫描
-        // （原实现每次都遍历全部 cache_size 条记录，并在持锁期间完成，造成锁竞争）。
-        let mut heap = self.prefetch_heap.lock().await;
+        // 关键：绝不“持堆锁跨分片锁 await”。原实现在持有 prefetch_heap 锁的整个扫描期
+        // 内逐个 await 分片锁，而 insert 路径是“分片→堆”顺序，二者形成锁顺序反转，
+        // 并发下会死锁（预取 worker 与缓存写入相互等待、双向挂起）。
+        // 这里改为：每次只从堆弹出一个候选、立即释放堆锁，再单独去锁分片判定；
+        // 需要保留在堆中的条目稍后统一放回。
         let mut expired = Vec::with_capacity(max_count);
+        let mut requeue: Vec<PrefetchKey> = Vec::new();
 
         // 判定过期的阈值：考虑 expired_ttl 提前量与 seconds_ahead 提前量。
         let threshold = if self.expired_ttl > 0 {
@@ -997,17 +1001,27 @@ impl DnsCache {
             now
         } + Duration::from_secs(seconds_ahead.unwrap_or(5));
 
-        while expired.len() < max_count {
-            // 堆顶为最早过期时间；仍未来期则停止。
-            let top = match heap.peek() {
-                Some(t) => t.clone(),
-                None => break,
+        loop {
+            // 取出堆顶（最早过期）候选并立即释放堆锁，避免与 insert 的锁顺序相撞。
+            let top = {
+                let mut heap = self.prefetch_heap.lock().await;
+                match heap.pop() {
+                    Some(t) => t.0,
+                    None => break,
+                }
             };
-            let PrefetchKey(exp, query) = top.0;
+            let PrefetchKey(exp, query) = top;
+
+            // 尚未到过期阈值：放回堆顶并停止（最小堆，后面必然更晚）。
             if exp > threshold {
+                requeue.push(PrefetchKey(exp, query));
                 break;
             }
-            heap.pop();
+            // 已达批量上限：放回并停止，下次再取。
+            if expired.len() >= max_count {
+                requeue.push(PrefetchKey(exp, query));
+                break;
+            }
 
             let idx = shard_index_of(&query, self.shards.len());
             let mut guard = self.shards[idx].lock().await;
@@ -1022,7 +1036,8 @@ impl DnsCache {
                 continue;
             }
             if entry.is_current(threshold) {
-                // 已被刷新，尚未真正过期
+                // 已被刷新，尚未真正过期：用最新 valid_until 放回堆，待下次再判。
+                requeue.push(PrefetchKey(entry.valid_until, query));
                 continue;
             }
 
@@ -1035,12 +1050,23 @@ impl DnsCache {
             ));
         }
 
+        // 把需要保留的堆条目放回（释放堆锁期间被弹出的那些）。
+        if !requeue.is_empty() {
+            let mut heap = self.prefetch_heap.lock().await;
+            for key in requeue {
+                heap.push(Reverse(key));
+            }
+        }
+
         // 下次检查时间：取堆中下一个（最早的）未过期条目距离现在的间隔。
-        let most_recent = match heap.peek().cloned() {
-            Some(Reverse(PrefetchKey(exp, _))) if exp > threshold => exp
-                .saturating_duration_since(threshold)
-                .min(Duration::from_secs(MAX_TTL as u64)),
-            _ => Duration::from_secs(MAX_TTL as u64),
+        let most_recent = {
+            let heap = self.prefetch_heap.lock().await;
+            match heap.peek().cloned() {
+                Some(Reverse(PrefetchKey(exp, _))) if exp > threshold => exp
+                    .saturating_duration_since(threshold)
+                    .min(Duration::from_secs(MAX_TTL as u64)),
+                _ => Duration::from_secs(MAX_TTL as u64),
+            }
         };
 
         expired.sort_by_key(|(_, hits, _)| std::cmp::Reverse(*hits));
@@ -1442,7 +1468,7 @@ mod tests {
             )
             .await;
 
-        sleep(Duration::from_millis(500)).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
 
         assert!(cache.get(lookup1.data.query(), now).await.is_some());
 

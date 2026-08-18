@@ -226,7 +226,8 @@ fn handle_strategy_result(result: IpStrategyResult) -> Result<DnsResponse, Looku
             Some(lookup) => Ok(lookup),
             None => match err_tasks.into_iter().next() {
                 Some(err) => Err(err),
-                None => unreachable!(),
+                // 无成功也无失败结果（理论不可达，但避免 panic）：视作无可用上游。
+                None => Err(ProtoErrorKind::NoConnections.into()),
             },
         },
         IpStrategyResult::Error(err) => Err(err),

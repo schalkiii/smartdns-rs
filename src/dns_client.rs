@@ -25,7 +25,7 @@ use crate::{
 use crate::libdns::{
     proto::{
         DnsHandle, ProtoError, ProtoErrorKind,
-        op::{Edns, Message, Query},
+        op::{Edns, Message, Query, ResponseCode},
         rr::{
             Record, RecordType,
             domain::{IntoName, Name},
@@ -48,8 +48,8 @@ pub const MAX_TTL: u32 = 86400_u32;
 /// hickory-proto 的 DnsMultiplexer 在活跃请求超过 CHANNEL_BUFFER_SIZE(32) 时
 /// 返回 ProtoErrorKind::Busy("resource too busy")。
 ///
-/// 并发数设为 16：实测数据表明降至 8 反而恶化 busy 率 3 倍（342/h→1057/h），
-/// 因为较低并发降低吞吐、延长排队，使僵尸请求占比升高。16 在个人电脑场景下
+/// 并发数设为 12：实测数据表明降至 8 反而恶化 busy 率 3 倍（342/h→1057/h），
+/// 因为较低并发降低吞吐、延长排队，使僵尸请求占比升高。12 在个人电脑场景下
 /// 兼顾吞吐与槽位余量。
 ///
 /// 注意：真正的僵尸请求根因已在 NameServerGroup::lookup 中通过 detached task
@@ -78,30 +78,36 @@ const NS_FAIL_THRESHOLD: u32 = 3;
 /// 熔断冷却时长。冷却期内该上游被整体跳过，冷却结束后才允许再试一次。
 const NS_COOLDOWN: Duration = Duration::from_secs(30);
 
-/// 检测 ProtoError 是否可重试（连接断开、资源繁忙等临时性错误）。
+/// 检测 ProtoError 是否为 `Busy`（上游多路复用器瞬时过载）。
 ///
+/// Busy 与连接断开/资源耗尽不同：它是“当前槽位已满”的瞬时信号。
+/// 此时重试不仅无益（槽位仍满，重试必再次 Busy），还会让 hickory 把本上游标记为
+/// Failed 并在下次查询时强制重连（触发全局 200ms socket 速率限制 + TLS 握手），
+/// 形成“busy → 重连 → 更慢 → 更 busy”的恶性循环。因此 busy 应快速跳过本上游，
+/// 交由 `NameServerGroup` 转向下一个上游，而不是在本上游上空耗。
+fn is_busy(err: &ProtoError) -> bool {
+    matches!(err.kind(), ProtoErrorKind::Busy)
+}
+
+/// 检测 ProtoError 是否可重试（连接断开、资源耗尽等临时性错误）。
+///
+/// 通过匹配 `ProtoErrorKind` 判断，避免对错误字符串/OS 码做脆弱嗅探。
 /// 可重试的错误类型：
-/// - ProtoErrorKind::Busy: DnsMultiplexer 缓冲区满
-/// - "receiver was canceled": 连接断开导致所有待处理请求被取消
-/// - IO 错误中的 OS 资源耗尽码 (WSAENOBUFS/ENOBUFS)
+/// - `ProtoErrorKind::Canceled`：连接断开导致待处理请求被取消
+///   （旧实现靠嗅探 "receiver was canceled" 字符串，现直接匹配枚举）
+/// - `ProtoErrorKind::Io` 且为 OS 资源耗尽码（WSAENOBUFS=10055 / ENOBUFS=105）
+///
+/// 注意：`ProtoErrorKind::Busy` 不再视为可重试——见 `is_busy` 说明，busy 应快速跳过。
 fn is_retryable(err: &ProtoError) -> bool {
-    if err.is_busy() {
-        return true;
+    match err.kind() {
+        // 连接断开导致待处理请求被取消，重试时创建新连接。
+        ProtoErrorKind::Canceled(_) => true,
+        // IO 错误中的 OS 资源耗尽码（缓冲区/端口耗尽），属临时性。
+        ProtoErrorKind::Io(io_err) => {
+            io_err.raw_os_error() == Some(10055) || io_err.raw_os_error() == Some(105)
+        }
+        _ => false,
     }
-
-    // 连接断开时，hickory-proto 的 DnsExchangeSend 返回此错误。
-    // 重试时 NameServer::connected_mut_client 会创建新连接，可正常恢复。
-    if err.to_string().contains("receiver was canceled") {
-        return true;
-    }
-
-    // 兜底：检查 IO 错误中的 OS 资源耗尽码
-    if let ProtoErrorKind::Io(io_err) = err.kind() {
-        return io_err.raw_os_error() == Some(10055)
-            || io_err.raw_os_error() == Some(105)
-            || io_err.to_string().contains("resource too busy");
-    }
-    false
 }
 
 #[derive(Default)]
@@ -164,12 +170,19 @@ impl DnsClientBuilder {
                 return None;
             }
             let server = entry.or_insert_with(|| {
-                let proxy = server_config
-                    .proxy
-                    .as_deref()
-                    .map(|n| proxies.get(n))
-                    .unwrap_or_default()
-                    .cloned();
+                let proxy = server_config.proxy.as_deref().and_then(|n| {
+                    match proxies.get(n) {
+                        Some(p) => Some(p.clone()),
+                        None => {
+                            warn!(
+                                "proxy '{}' referenced by upstream {} not found, ignoring",
+                                n,
+                                server_config.server
+                            );
+                            None
+                        }
+                    }
+                });
                 match NameServer::new(
                     server_config.clone(),
                     proxy,
@@ -600,7 +613,7 @@ mod name_server {
             if streak < NS_FAIL_THRESHOLD {
                 return false;
             }
-            match *self.last_failure.lock().unwrap() {
+            match *self.last_failure.lock().unwrap_or_else(|e| e.into_inner()) {
                 Some(t) => t.elapsed() < NS_COOLDOWN,
                 None => false,
             }
@@ -614,7 +627,7 @@ mod name_server {
         /// 记录一次失败：递增计数并刷新最近失败时间。
         fn record_failure(&self) {
             self.fail_streak.fetch_add(1, Ordering::Relaxed);
-            *self.last_failure.lock().unwrap() = Some(Instant::now());
+            *self.last_failure.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
         }
 
         pub async fn warmup(&self) -> Result<(), ProtoError> {
@@ -714,9 +727,27 @@ mod name_server {
 
                 match res {
                     Ok(response) => {
-                        // 成功即重置熔断计数。
-                        self.record_success();
+                        // SERVFAIL/REFUSED 是有效的 DNS 响应，但仍视为上游失败：
+                        // 记录失败以触发熔断冷却，避免对持续出错的上游反复空耗。
+                        // 响应本身仍回传（无记录），由 NameServerGroup 继续尝试其它上游。
+                        match response.response_code() {
+                            ResponseCode::ServFail | ResponseCode::Refused => self.record_failure(),
+                            _ => self.record_success(),
+                        }
                         return Ok(From::<Message>::from(response.into()));
+                    }
+                    // Busy 是上游多路复用器瞬时过载（active_requests 超过上限）。
+                    // 此情形下重试只会加剧拥塞，且 hickory 收到任意发送错误后都会把本上游
+                    // 标记为 Failed 并在下次查询时强制重连（全局 200ms socket 速率限制 +
+                    // TLS 握手），形成“busy → 重连 → 更慢 → 更 busy”的恶性循环。
+                    // 因此 busy 不重试、不占槽等待，立即失败让 NameServerGroup 转向下一个上游。
+                    Err(err) if is_busy(&err) => {
+                        log::debug!(
+                            "[ns] lookup busy (multiplexer overloaded), skipping {} {}",
+                            query_name,
+                            query_type,
+                        );
+                        return Err(err.into());
                     }
                     Err(err)
                         if is_retryable(&err)

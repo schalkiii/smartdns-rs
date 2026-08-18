@@ -33,12 +33,14 @@ struct DnsStats {
 #[get("/stats", tag = "Stats")]
 async fn stats(State(state): State<Arc<ServeState>>) -> Json<DnsStats> {
     let app = &state.app;
+    // 注：cache_hits / cache_query_hits 均改用 O(1) 的全局命中计数 query_hits，
+    // 不再在每次 /stats 轮询时全量克隆整个缓存（cache-size=65536 下会克隆数万条记录）。
+    // cache_hits 此前为各条目命中计数之和（跨重启累加、与 total_queries 不可比），
+    // 现与 cache_query_hits 统一为"自启动以来的缓存命中总数"，语义一致且零开销。
     let (cache_size, cache_hits, cache_query_hits) = if let Some(c) = app.cache().await {
-        let records = c.cached_records().await;
-        let size = records.len();
-        let hits: u64 = records.iter().map(|r| r.hits as u64).sum();
+        let size = c.entry_count().await;
         let query_hits = c.query_hits();
-        (size, hits, query_hits)
+        (size, query_hits, query_hits)
     } else {
         (0, 0, 0)
     };
