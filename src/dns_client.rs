@@ -488,6 +488,12 @@ mod name_server_group {
             // 首个有效结果返回后，其余 task 在后台自然完成并释放 DnsMultiplexer 槽位，
             // 不产生僵尸。代价是慢速服务器的查询多占用少量带宽，但 per-NameServer
             // semaphore 会自然限流，且 task 会在超时后自动结束。
+            // 空上游组直接返回无连接错误：否则 mpsc::channel(0) 在容量为 0 时会 panic，
+            // 且后续 recv() 也将无意义地空等。
+            if self.servers.is_empty() {
+                return Err(crate::libdns::proto::ProtoErrorKind::NoConnections.into());
+            }
+
             let total = self.servers.len();
             let (tx, mut rx) = tokio::sync::mpsc::channel(total);
 
@@ -1074,6 +1080,17 @@ where
 mod tests {
 
     use super::*;
+
+    #[tokio::test]
+    async fn test_name_server_group_empty_lookup_no_panic() {
+        use super::GenericResolver;
+        use super::name_server_group::NameServerGroup;
+        // 空上游组必须返回错误，而非在 mpsc::channel(0) 处 panic。
+        let group = NameServerGroup::default();
+        let result = group.lookup("example.com", LookupOptions::default()).await;
+        assert!(result.is_err(), "空上游组 lookup 应返回错误而非 panic");
+    }
+
     use crate::{
         dns_url::DnsUrl,
         preset_ns::{ALIDNS, CLOUDFLARE},

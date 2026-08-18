@@ -16,6 +16,18 @@
 
 `default = ["common", "self-update"]` → `default = ["common", "self-update", "web-ui"]`，默认构建即嵌入 Web 仪表盘，无需显式 `--features web-ui`。
 
+### fix(config/api): address 托管配置回写避免 panic
+
+**问题**：`ConfigItem::Display` 仅实现了 `Address`/`Server`/`ForwardRule` 等少数变体，其余约 70 个变体均为 `todo!()`。WebUI 地址管理 API（`api/address.rs` 的 `create`/`delete`）改写 `address.conf` 时会对整份 `ConfigFile` 调用 `format!("{config}")` 序列化写回；只要该文件包含任何非 `Address` 的配置行（如用户手改混入），即触发 `todo!()` **panic**，导致请求失败、配置写回中断。
+
+**修复**：
+- `config/parser/mod.rs`：将 `ConfigItem::Display` 全部 `todo!()` 改为安全占位（输出 `# unsupported config item: {:?}` 形式），任何变体序列化都不会 panic 并保留原始信息。
+- `api/address.rs`：改写前先 `retain` 仅保留 `Address` 规则与注释/空行，确保托管文件只承载 address 规则，彻底避免触碰未实现变体。
+
+### fix(dns_client): 空上游组 lookup 避免 panic
+
+`NameServerGroup::lookup` 在 `servers` 为空时以 `mpsc::channel(0)` 创建容量为 0 的通道会直接 **panic**，且后续 `recv()` 无意义空等。改为在开头判断空组直接返回 `NoConnections` 错误。补充单测 `test_name_server_group_empty_lookup_no_panic` 与 `test_config_item_unsupported_display_no_panic`。
+
 ### fix(dns_mw_cache): 修复 get_expired 与 insert 的锁顺序反转死锁
 
 **问题**：`get_expired` 在持有 `prefetch_heap` 锁的整个扫描期内逐个 `await` 各分片锁，而 `insert` 路径是「分片→堆」顺序。两者构成**锁顺序反转**，在预取 worker 与缓存写入并发时相互等待、双向挂起，导致相关查询永久挂起（间歇性脑裂式无响应）。

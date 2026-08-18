@@ -81,6 +81,19 @@ async fn create(
             });
         };
 
+        // 仅保留 address 规则与注释/空行：address.conf 由本 API 专托管，
+        // 避免序列化未实现 Display 的其它 ConfigItem 变体（原 todo! 会 panic），
+        // 也符合该文件只承载 address 规则的语义。
+        config.retain(|line| {
+            matches!(
+                line,
+                ConfigLine::Config {
+                    config: ConfigItem::Address(_),
+                    ..
+                } | ConfigLine::Comment(_)
+                  | ConfigLine::EmptyLine
+            )
+        });
         std::fs::write(&file, format!("{config}"))?;
     } else {
         let config = ConfigItem::Address(rule);
@@ -138,6 +151,17 @@ async fn delete(
         config.remove(*i);
     }
 
+    // 仅保留 address 规则与注释/空行，避免序列化未实现 Display 的其它 ConfigItem 变体导致 panic。
+    config.retain(|line| {
+        matches!(
+            line,
+            ConfigLine::Config {
+                config: ConfigItem::Address(_),
+                ..
+            } | ConfigLine::Comment(_)
+              | ConfigLine::EmptyLine
+        )
+    });
     std::fs::write(&file, format!("{config}"))?;
 
     state.app.reload().await?;
