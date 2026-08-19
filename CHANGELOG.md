@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [v0.13.2] - 2026-08-19
+
+### build(webui): webui/out 静态产物入库，修复默认特性 CI 编译失败
+
+`web-ui` 已加入默认特性，而 RustEmbed 编译期需要 `webui/out` 目录。将该目录从 `.gitignore` 移除并入库，保证 clone 与 CI（test/cleanliness/compatibility/build）在默认特性下可直接编译，无需先构建前端。
+
 ### fix(dns_client): Busy 快速失败，切断“busy→重连→更慢”恶性循环
 
 **问题**：运行十余天后 WebUI “上游查询耗时”升至 700~800ms（日志实测 prefetch median=210ms / mean=222ms / p95=437ms，`resource too busy` 占查询约 32%）。
