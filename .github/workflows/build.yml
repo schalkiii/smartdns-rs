@@ -33,6 +33,8 @@ on:
         description: "Identify the release as a prerelease. Defaults to false"
         required: false
 
+permissions:
+  contents: write
 
 jobs:
   build:
