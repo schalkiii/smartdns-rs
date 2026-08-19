@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### ci: 修复 cleanliness job 的 clippy/fmt 失败
+
+- `proxy.rs`：`connect_udp` 的 HTTP 分支移除 `needless_return`（改为表达式），通过 `cargo clippy -- -D warnings`。
+- 运行 `cargo fmt --all` 统一格式（address.rs / config-parser / dns_client / dns_mw_cache / server/tls），通过 `cargo fmt --check`。
+
+### ci(build): build.yml 的 workflow_dispatch 支持 version/prerelease 输入
+
+手动触发 `build.yml` 时可指定 `version`（git tag，如 `v0.13.2`）与 `prerelease`，配合 `softprops/action-gh-release` 发布 release；不传时回退使用分支名。
+
 ## [v0.13.2] - 2026-08-19
 
 ### build(webui): webui/out 静态产物入库，修复默认特性 CI 编译失败
