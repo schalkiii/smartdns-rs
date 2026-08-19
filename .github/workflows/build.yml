@@ -19,11 +19,19 @@ on:
 
   workflow_dispatch:
     inputs:
+      version:
+        type: string
+        required: false
+        description: Version (git tag) to build and release, e.g. v0.13.2. Leave empty to use the branch ref name.
       features:
         type: string
         required: false
         default: default
         description: Space or comma separated list of features to activate
+      prerelease:
+        type: boolean
+        description: "Identify the release as a prerelease. Defaults to false"
+        required: false
 
 
 jobs:
