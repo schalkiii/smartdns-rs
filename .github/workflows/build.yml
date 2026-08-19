@@ -162,6 +162,11 @@ jobs:
   build-docker:
     name: Build Docker image
     runs-on: ubuntu-latest
+    # 推送 ghcr.io organization package 需要 packages:write；
+    # job 级 permissions 会覆盖 workflow 级，故此处显式声明所需权限
+    permissions:
+      contents: read
+      packages: write
     needs: build
     steps:
       - name: Checkout
