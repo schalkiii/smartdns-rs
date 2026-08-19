@@ -18,7 +18,9 @@
 node_modules
 dist
 webui/.next
-webui/out
+# webui/out 提交入库：默认特性已含 web-ui，RustEmbed 编译期需要该目录，
+# 入库保证 clone 与 CI 无需先构建前端即可编译。
+# webui/out
 
 .idea/
 
