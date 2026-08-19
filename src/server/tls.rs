@@ -76,7 +76,8 @@ pub fn serve(
                 // perform the TLS handshake, bounded by the idle timeout so a client
                 // that opens a TCP connection but never completes the handshake cannot
                 // pin a task + socket indefinitely (slowloris-style resource exhaustion).
-                let tls_stream = tokio::time::timeout(timeout, tls_acceptor.accept(tcp_stream)).await;
+                let tls_stream =
+                    tokio::time::timeout(timeout, tls_acceptor.accept(tcp_stream)).await;
 
                 let tls_stream = match tls_stream {
                     Ok(Ok(tls_stream)) => AsyncIoTokioAsStd(tls_stream),

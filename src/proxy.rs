@@ -100,12 +100,10 @@ pub async fn connect_udp(
 
                 Ok(UdpSocket::Proxy(socket))
             }
-            ProxyProtocol::Http => {
-                return Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    "HTTP proxy does not support UDP associate",
-                ));
-            }
+            ProxyProtocol::Http => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "HTTP proxy does not support UDP associate",
+            )),
         },
         None => TokioUdpSocket::bind(local_addr).await.map(UdpSocket::Tokio),
     }

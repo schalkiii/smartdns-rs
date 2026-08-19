@@ -374,7 +374,10 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
                 // 否定响应（NXDOMAIN / NODATA）缓存：这类响应在家庭网络中占比很高
                 // （尤其是双栈域名的 AAAA 查询，常常无 AAAA 记录而返回否定应答），
                 // 原版 smartdns 默认缓存之，可显著提升缓存命中率。
-                if !ctx.no_cache && ctx.cfg().cache_negative() && is_negative_response(&lookup, &query) {
+                if !ctx.no_cache
+                    && ctx.cfg().cache_negative()
+                    && is_negative_response(&lookup, &query)
+                {
                     let neg_ttl = negative_ttl(&lookup);
                     self.cache
                         .insert_negative(
@@ -1389,11 +1392,7 @@ mod tests {
         // AAAA 查询，应答仅含一条 CNAME（无 AAAA）→ 典型双栈 NODATA，应判为否定。
         // 修复前因 is_negative_response 要求"应答区为空"，漏判此类高频响应，导致命中率偏低。
         let cname_target: Name = "target.example.com.".parse().unwrap();
-        let cname = Record::from_rdata(
-            name.clone(),
-            60,
-            RData::CNAME(CNAME(cname_target)),
-        );
+        let cname = Record::from_rdata(name.clone(), 60, RData::CNAME(CNAME(cname_target)));
         let mut resp = DnsResponse::new_with_max_ttl(aaaa_q.clone(), vec![cname]);
         resp.set_response_code(ResponseCode::NoError);
         assert!(

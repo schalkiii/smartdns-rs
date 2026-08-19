@@ -91,7 +91,7 @@ async fn create(
                     config: ConfigItem::Address(_),
                     ..
                 } | ConfigLine::Comment(_)
-                  | ConfigLine::EmptyLine
+                    | ConfigLine::EmptyLine
             )
         });
         std::fs::write(&file, format!("{config}"))?;
@@ -159,7 +159,7 @@ async fn delete(
                 config: ConfigItem::Address(_),
                 ..
             } | ConfigLine::Comment(_)
-              | ConfigLine::EmptyLine
+                | ConfigLine::EmptyLine
         )
     });
     std::fs::write(&file, format!("{config}"))?;

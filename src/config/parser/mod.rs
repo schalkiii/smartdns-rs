@@ -176,7 +176,9 @@ impl std::fmt::Display for ConfigItem {
             ConfigItem::CacheFile(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::CachePersist(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::CacheSize(_) => write!(f, "# unsupported config item: {:?}", self)?,
-            ConfigItem::CacheCheckpointTime(_) => write!(f, "# unsupported config item: {:?}", self)?,
+            ConfigItem::CacheCheckpointTime(_) => {
+                write!(f, "# unsupported config item: {:?}", self)?
+            }
             ConfigItem::CaFile(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::CaPath(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::ClientRule(_) => write!(f, "# unsupported config item: {:?}", self)?,
@@ -190,11 +192,19 @@ impl std::fmt::Display for ConfigItem {
             ConfigItem::Domain(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::DomainRule(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::DomainSetProvider(_) => write!(f, "# unsupported config item: {:?}", self)?,
-            ConfigItem::DualstackIpAllowForceAAAA(_) => write!(f, "# unsupported config item: {:?}", self)?,
-            ConfigItem::DualstackIpSelection(_) => write!(f, "# unsupported config item: {:?}", self)?,
-            ConfigItem::DualstackIpSelectionThreshold(_) => write!(f, "# unsupported config item: {:?}", self)?,
+            ConfigItem::DualstackIpAllowForceAAAA(_) => {
+                write!(f, "# unsupported config item: {:?}", self)?
+            }
+            ConfigItem::DualstackIpSelection(_) => {
+                write!(f, "# unsupported config item: {:?}", self)?
+            }
+            ConfigItem::DualstackIpSelectionThreshold(_) => {
+                write!(f, "# unsupported config item: {:?}", self)?
+            }
             ConfigItem::EdnsClientSubnet(_) => write!(f, "# unsupported config item: {:?}", self)?,
-            ConfigItem::ExpandPtrFromAddress(_) => write!(f, "# unsupported config item: {:?}", self)?,
+            ConfigItem::ExpandPtrFromAddress(_) => {
+                write!(f, "# unsupported config item: {:?}", self)?
+            }
             ConfigItem::ForceAAAASOA(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::ForceHTTPSSOA(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::ForceQtypeSoa(_) => write!(f, "# unsupported config item: {:?}", self)?,
@@ -222,7 +232,9 @@ impl std::fmt::Display for ConfigItem {
             ConfigItem::ResponseMode(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::ServeExpired(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::ServeExpiredTtl(_) => write!(f, "# unsupported config item: {:?}", self)?,
-            ConfigItem::ServeExpiredReplyTtl(_) => write!(f, "# unsupported config item: {:?}", self)?,
+            ConfigItem::ServeExpiredReplyTtl(_) => {
+                write!(f, "# unsupported config item: {:?}", self)?
+            }
             ConfigItem::Server(c) => {
                 write!(f, "server {c}")?;
             }

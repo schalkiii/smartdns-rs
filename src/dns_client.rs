@@ -170,19 +170,19 @@ impl DnsClientBuilder {
                 return None;
             }
             let server = entry.or_insert_with(|| {
-                let proxy = server_config.proxy.as_deref().and_then(|n| {
-                    match proxies.get(n) {
+                let proxy = server_config
+                    .proxy
+                    .as_deref()
+                    .and_then(|n| match proxies.get(n) {
                         Some(p) => Some(p.clone()),
                         None => {
                             warn!(
                                 "proxy '{}' referenced by upstream {} not found, ignoring",
-                                n,
-                                server_config.server
+                                n, server_config.server
                             );
                             None
                         }
-                    }
-                });
+                    });
                 match NameServer::new(
                     server_config.clone(),
                     proxy,
