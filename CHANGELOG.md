@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### ci(docker): 为 build-docker 添加 packages:write 权限，修复 ghcr.io 推送被拒
+
+`build-docker` job 推送镜像到 ghcr.io 时报 `denied: installation not allowed to Write organization package`——workflow 级 `permissions` 仅声明 `contents: write`，缺少 `packages: write`。给 `build-docker` job 单独添加 `permissions: { contents: read, packages: write }`（job 级覆盖 workflow 级，遵循最小权限）。
+
 ### ci: 修复 cleanliness job 的 clippy/fmt 失败
 
 - `proxy.rs`：`connect_udp` 的 HTTP 分支移除 `needless_return`（改为表达式），通过 `cargo clippy -- -D warnings`。
