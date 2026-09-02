@@ -11,7 +11,10 @@ on:
 
 jobs:
   build:
+    # caller 的 permissions 是 reusable workflow 的权限天花板，
+    # 必须覆盖 build.yml workflow 级声明的所有权限（contents:write + packages:write），
+    # 否则 GitHub Actions 报 startup_failure（reusable workflow 不允许提升权限）。
     permissions:
-      contents: read
+      contents: write
       packages: write
     uses: ./.github/workflows/build.yml
