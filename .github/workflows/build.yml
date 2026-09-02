@@ -33,8 +33,13 @@ on:
         description: "Identify the release as a prerelease. Defaults to false"
         required: false
 
+# workflow 级 permissions 定义该 workflow 允许的最大权限边界。
+# 作为 reusable workflow 被调用时，调用方传入的 permissions 必须是此处的子集，
+# 否则 GitHub Actions 报 startup_failure。故需同时声明 build job 的 contents:write
+# 与 build-docker job 的 packages:write。
 permissions:
   contents: write
+  packages: write
 
 jobs:
   build:
