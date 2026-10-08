@@ -101,7 +101,7 @@ This repository is a production-hardened fork of [mokeyish/smartdns-rs](https://
 
 - **Advanced Statistics & Monitoring**
 
-  Separately tracks foreground and background query metrics including query counts and average response times. Web UI displays real-time statistics for both user-facing queries and background cache prefetch operations.
+  Separately tracks foreground and background query metrics including query counts and average response times. The Web UI displays four real-time metrics — overall average query time, cache-hit query time, upstream query time, and background prefetch time — making it easy to pinpoint performance bottlenecks.
 
 - **Cache Prefetch Optimization**
 
