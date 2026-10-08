@@ -1,14 +1,12 @@
 # SmartDNS-rs
 
-![Test](https://github.com/mokeyish/smartdns-rs/actions/workflows/test.yml/badge.svg?branch=main)
-[![Crates.io Version](https://img.shields.io/crates/v/smartdns.svg)](https://crates.io/crates/smartdns)
-[![GitHub release (latest by date including pre-releases)](https://img.shields.io/github/v/release/mokeyish/smartdns-rs?display_name=tag&include_prereleases)](https://github.com/mokeyish/smartdns-rs/releases)
-[![homebrew version](https://img.shields.io/homebrew/v/smartdns)](https://formulae.brew.sh/formula/smartdns)
+![Test](https://github.com/schalkiii/smartdns-rs/actions/workflows/test.yml/badge.svg?branch=main)
+[![GitHub release (latest by date including pre-releases)](https://img.shields.io/github/v/release/schalkiii/smartdns-rs?display_name=tag&include_prereleases)](https://github.com/schalkiii/smartdns-rs/releases)
 ![OS](https://img.shields.io/badge/os-Windows%20%7C%20MacOS%20%7C%20Linux-blue)
 
 [Docs](https://pymumu.github.io/smartdns/) •
 
-[English](https://github.com/mokeyish/smartdns-rs/blob/main/README.md) | 中文
+[English](https://github.com/schalkiii/smartdns-rs/blob/main/README.md) | 中文
 
 SmartDNS-rs 🐋 一个是受 [C 语言版 SmartDNS](https://github.com/pymumu/smartdns)  启发而开发的，并与其配置兼容的运行在本地的跨平台 DNS 服务器，
 它接受来自本地客户端的 DNS 查询请求，然后从多个上游 DNS 服务器获取 DNS 查询结果，并将访问速度最快的结果返回给客户端，
@@ -94,7 +92,7 @@ SmartDNS-rs 🐋 一个是受 [C 语言版 SmartDNS](https://github.com/pymumu/s
 
 **目前仍在开发中，请勿用于生产环境，欢迎试用并提供反馈。**
 
-请参考 [TODO](https://github.com/mokeyish/smartdns-rs/blob/main/TODO.md) 查看功能覆盖情况。
+请参考 [TODO](https://github.com/schalkiii/smartdns-rs/blob/main/TODO.md) 查看功能覆盖情况。
 
 ## 故障排查
 

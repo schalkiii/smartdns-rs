@@ -1,14 +1,12 @@
 # SmartDNS-rs
 
-![Test](https://github.com/mokeyish/smartdns-rs/actions/workflows/test.yml/badge.svg?branch=main)
-[![Crates.io Version](https://img.shields.io/crates/v/smartdns.svg)](https://crates.io/crates/smartdns)
-[![GitHub release (latest by date including pre-releases)](https://img.shields.io/github/v/release/mokeyish/smartdns-rs?display_name=tag&include_prereleases)](https://github.com/mokeyish/smartdns-rs/releases)
-[![homebrew version](https://img.shields.io/homebrew/v/smartdns)](https://formulae.brew.sh/formula/smartdns)
+![Test](https://github.com/schalkiii/smartdns-rs/actions/workflows/test.yml/badge.svg?branch=main)
+[![GitHub release (latest by date including pre-releases)](https://img.shields.io/github/v/release/schalkiii/smartdns-rs?display_name=tag&include_prereleases)](https://github.com/schalkiii/smartdns-rs/releases)
 ![OS](https://img.shields.io/badge/os-Windows%20%7C%20MacOS%20%7C%20Linux-blue)
 
 [Docs](https://pymumu.github.io/smartdns/en/) •
 
-English | [中文](https://github.com/mokeyish/smartdns-rs/blob/main/README_zh-CN.md)
+English | [中文](https://github.com/schalkiii/smartdns-rs/blob/main/README_zh-CN.md)
 
 SmartDNS-rs 🐋 is a local DNS server imspired by [C SmartDNS](https://github.com/pymumu/smartdns) to accepts DNS query requests from local clients, obtains DNS query results from multiple upstream DNS servers, and returns the fastest access results to clients. Avoiding DNS pollution and improving network access speed, supports high-performance ad filtering.
 
@@ -29,6 +27,37 @@ This project is a **Rust reimplementation** of [SmartDNS](https://github.com/pym
 | **Background Tasks**  | Basic                                   | Queue-based with rate limiting           |
 | **Cache Prefetch**    | Fixed interval                          | Configurable batch + exponential backoff |
 | **Statistics**        | Limited                                 | Separate foreground/background metrics   |
+
+## Enhancements over the upstream project
+
+This repository is a production-hardened fork of [mokeyish/smartdns-rs](https://github.com/mokeyish/smartdns-rs). Beyond the upstream codebase it adds a fully featured Web UI, a series of performance optimizations and robustness fixes — most of them driven by **real long-running deployment issues** (weeks of continuous operation in a home LAN with mixed UDP/DoT/DoH upstreams). Highlights:
+
+### Web UI (major expansion)
+
+- **Query Log page** (new): the most recent 1000 queries from an in-memory ring buffer, with domain / client / record-type filters, auto-refresh toggle and manual refresh — backed by the new `/api/query-log` endpoint.
+- **Upstream server statistics** (new): per-server IP, port, protocol (UDP/TCP/DoT/DoH/DoQ/DoH3), security (encrypted/plaintext), runtime status (healthy/error), query/success/failure totals, average response time and success rate, plus aggregate totals — via `/api/nameservers` and `/api/stats/top-domains|clients|query-types`.
+- **Overview page** (new): top domains & active clients ranking.
+- **Accurate cache hit rate**: replaced the ambiguous "sum of per-entry hit counts" (which required cloning the entire cache on every `/stats` poll) with an O(1) per-query hit counter.
+- The `web-ui` feature is **enabled by default** — every build ships with the dashboard.
+
+### Performance
+
+- **Busy fast-fail**: upstream `Busy` errors are no longer retried (which occupied semaphore slots and triggered forced reconnections), cutting the "busy → reconnect → slower → busier" death spiral that used to push p95 upstream latency to ~440ms after weeks of uptime.
+- **Zombie request elimination**: `NameServerGroup` uses detached tasks instead of `FuturesUnordered` with early cancel, so race-losing queries finish naturally and release their `DnsMultiplexer` slots instead of accumulating as "zombies" that exhaust the 32-slot buffer.
+- **Per-NameServer concurrency limiting**: a dedicated semaphore per upstream server, plus an application-level deadline/timeout wrapper covering the whole upstream lookup (including TCP/TLS/QUIC handshake).
+- **Prefetch pipeline fixes**: heap-based ready queue (no full scans), prefetch timer leak fix that degraded long-running performance, cache-shard locking, and negative caching (NXDOMAIN/NODATA, including dual-stack AAAA misses) restored — measurably improving cache hit rate in home networks.
+- **Middleware hot path**: reduced redundant allocations in the DNS middleware chain.
+
+### Robustness
+
+- **Circuit breaker per upstream**: consecutive-failure tracking with cooldown skipping; `SERVFAIL`/`REFUSED` responses now also trip the breaker.
+- **Panic elimination sweep**: ~20 `panic!`/`todo!()`/`expect()` hot paths hardened — empty upstream groups, UDP upstreams misconfigured with an HTTP proxy, partial listener bind failures, poisoned mutexes, non-UTF-8 CLI args, unknown config directives, audit write-thread failures, prefetch `clear()` missing the ready heap, and more.
+- **No blocking on the response path**: audit writes go through a bounded channel and never block DNS responses; DoT handshakes are time-bounded (slowloris protection); background (prefetch) queries are no longer silently dropped, fixing `active_queries` counter leaks.
+
+### Operations & CI
+
+- Docker images published to `ghcr.io` on every release; reproducible release pipeline (`workflow_dispatch` → GitHub Release with per-platform assets + sha256sums, 13 targets).
+- Long-running operational tuning captured in the docs: recommended config for `speed-check-mode none`, cache sizing, and upstream health triage (see Troubleshooting below).
 
 ---
 
@@ -92,11 +121,11 @@ Note: The C version of smartdns is very functional, but because it only supports
 
 **It is still under development, please do not use it in production environment, welcome to try and provide feedback.**
 
-Please refer to [TODO](https://github.com/mokeyish/smartdns-rs/blob/main/TODO.md) for the function coverage
+Please refer to [TODO](https://github.com/schalkiii/smartdns-rs/blob/main/TODO.md) for the function coverage
 
 ## Installing
 
-_Nightly builds can be found [here](https://github.com/mokeyish/smartdns-rs/actions/workflows/nightly.yml)._
+_Nightly builds can be found [here](https://github.com/schalkiii/smartdns-rs/actions/workflows/nightly.yml)._
 
 - MacOS
 
@@ -115,7 +144,7 @@ _Nightly builds can be found [here](https://github.com/mokeyish/smartdns-rs/acti
 
 - Windows / Linux
 
-  Go to [here](https://github.com/mokeyish/smartdns-rs/releases) to download the package and decompress it.
+  Go to [here](https://github.com/schalkiii/smartdns-rs/releases) to download the package and decompress it.
   1. Get help
 
      ```shell
@@ -180,7 +209,7 @@ server-h3 1.1.1.1
 server-quic unfiltered.adguard-dns.com
 ```
 
-For more advanced configurations, please refer to [here](https://github.com/pymumu/smartdns/blob/doc/en/docs/configuration.md) , and refer to [TODO](https://github.com/mokeyish/smartdns-rs/blob/main/TODO.md) for the function coverage.
+For more advanced configurations, please refer to [here](https://github.com/pymumu/smartdns/blob/doc/en/docs/configuration.md) , and refer to [TODO](https://github.com/schalkiii/smartdns-rs/blob/main/TODO.md) for the function coverage.
 
 ## Built-in diagnostics via `dig`
 
@@ -221,8 +250,6 @@ dig @127.0.0.1 CH TXT id.server +short
 
 SmartDNS-rs includes an embedded web dashboard accessible over HTTP. It provides real-time monitoring of DNS query statistics, cache inspection, upstream server status, and rule management — all in a single-page tabbed interface.
 
-![SmartDNS Dashboard](https://github.com/mokeyish/smartdns-rs/assets/1006202/a67b8d1b-8a7b-4c3d-9e8f-2b3d4e5f6a7c)
-
 ### Enabling the Dashboard
 
 1. **Enable the `web-ui` feature at build time** (already enabled by default):
@@ -262,7 +289,7 @@ SmartDNS-rs includes an embedded web dashboard accessible over HTTP. It provides
 Assuming you have installed [Rust](https://www.rust-lang.org/learn/get-started), then you can open the terminal and execute these commands:
 
 ```shell
-git clone https://github.com/mokeyish/smartdns-rs.git
+git clone https://github.com/schalkiii/smartdns-rs.git
 cd smartdns-rs
 
 # install https://github.com/casey/just
