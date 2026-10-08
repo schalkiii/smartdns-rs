@@ -1,13 +1,18 @@
-use std::sync::Arc;
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex};
 
-use axum::{Json, extract::State};
+use axum::{Json, extract::Query, extract::State};
 use serde::Serialize;
 
 use super::openapi::{IntoRouter, ToSchema, http::get, routes};
 use super::{ServeState, StatefulRouter};
 
 pub fn routes() -> StatefulRouter {
-    routes![stats].into_router()
+    let mut router = routes![stats].into_router();
+    router = router.merge(routes![top_domains].into_router());
+    router = router.merge(routes![clients].into_router());
+    router = router.merge(routes![query_types].into_router());
+    router
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -80,4 +85,80 @@ async fn stats(State(state): State<Arc<ServeState>>) -> Json<DnsStats> {
         version: crate::BUILD_VERSION,
         history,
     })
+}
+
+/// 名称 + 计数（及平均耗时），用于热门域名 / 客户端等排行。
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct NameCount {
+    name: String,
+    count: u64,
+    avg_time_ms: f64,
+}
+
+#[derive(serde::Deserialize)]
+struct RankParams {
+    limit: Option<usize>,
+}
+
+/// 从 WebUI 查询日志环形缓冲聚合统计（最近 N 条，内存非持久化）。
+fn aggregate(
+    ring: &Arc<Mutex<VecDeque<crate::dns_mw_audit::QueryLogEntry>>>,
+    classify: impl Fn(&crate::dns_mw_audit::QueryLogEntry) -> Option<String>,
+) -> Vec<NameCount> {
+    let q = ring.lock().unwrap();
+    let mut map: HashMap<String, (u64, f64)> = HashMap::new();
+    for e in q.iter() {
+        if let Some(key) = classify(e) {
+            let entry = map.entry(key).or_insert((0, 0.0));
+            entry.0 += 1;
+            entry.1 += e.elapsed_ms;
+        }
+    }
+    let mut v: Vec<NameCount> = map
+        .into_iter()
+        .map(|(name, (count, total))| NameCount {
+            name,
+            count,
+            avg_time_ms: if count > 0 { total / count as f64 } else { 0.0 },
+        })
+        .collect();
+    v.sort_by(|a, b| {
+        b.count.cmp(&a.count).then(
+            b.avg_time_ms
+                .partial_cmp(&a.avg_time_ms)
+                .unwrap_or(std::cmp::Ordering::Equal),
+        )
+    });
+    v
+}
+
+#[get("/stats/top-domains", tag = "Stats")]
+async fn top_domains(
+    State(state): State<Arc<ServeState>>,
+    Query(params): Query<RankParams>,
+) -> Json<Vec<NameCount>> {
+    let ring = state.app.query_log();
+    let mut v = aggregate(&ring, |e| Some(e.domain.clone()));
+    let limit = params.limit.unwrap_or(10).clamp(1, 100);
+    v.truncate(limit);
+    Json(v)
+}
+
+#[get("/stats/clients", tag = "Stats")]
+async fn clients(
+    State(state): State<Arc<ServeState>>,
+    Query(params): Query<RankParams>,
+) -> Json<Vec<NameCount>> {
+    let ring = state.app.query_log();
+    let mut v = aggregate(&ring, |e| Some(e.client.clone()));
+    let limit = params.limit.unwrap_or(10).clamp(1, 100);
+    v.truncate(limit);
+    Json(v)
+}
+
+#[get("/stats/query-types", tag = "Stats")]
+async fn query_types(State(state): State<Arc<ServeState>>) -> Json<Vec<NameCount>> {
+    let ring = state.app.query_log();
+    let v = aggregate(&ring, |e| Some(e.query_type.clone()));
+    Json(v)
 }

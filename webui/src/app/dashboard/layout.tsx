@@ -18,10 +18,11 @@ import DnsIcon from '@mui/icons-material/Dns';
 import StorageIcon from '@mui/icons-material/Storage';
 import RuleIcon from '@mui/icons-material/Rule';
 import MenuIcon from '@mui/icons-material/Menu';
+import HistoryIcon from '@mui/icons-material/History';
 
 const DRAWER_WIDTH = 240;
 
-export type DashboardTab = 'overview' | 'upstream' | 'cache' | 'rules';
+export type DashboardTab = 'overview' | 'upstream' | 'cache' | 'rules' | 'querylog';
 
 interface DashboardTabContextType {
   currentTab: DashboardTab;
@@ -42,6 +43,7 @@ const navItems: { label: string; icon: React.ReactNode; tab: DashboardTab }[] = 
   { label: '上游服务器', icon: <DnsIcon />, tab: 'upstream' },
   { label: '缓存管理', icon: <StorageIcon />, tab: 'cache' },
   { label: '规则管理', icon: <RuleIcon />, tab: 'rules' },
+  { label: '查询日志', icon: <HistoryIcon />, tab: 'querylog' },
 ];
 
 export default function DashboardLayout({

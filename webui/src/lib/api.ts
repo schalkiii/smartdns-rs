@@ -92,15 +92,26 @@ export interface CacheConfigResponse {
   [key: string]: unknown;
 }
 
-export interface Nameserver {
-  group: string[];
+export interface UpstreamServer {
+  name?: string | null;
   server: string;
-  [key: string]: unknown;
+  group: string[];
+  protocol: string;
+  security: string;
+  ip: string;
+  port: number;
+  status: string;
+  query_total: number;
+  success_total: number;
+  failure_total: number;
+  avg_time_ms: number;
+  success_rate: number;
 }
 
 export interface NameserversResponse {
   count: number;
-  data: Nameserver[];
+  total: number;
+  data: UpstreamServer[];
 }
 
 export interface Listener {
@@ -113,6 +124,36 @@ export interface Listener {
 export interface ListenersResponse {
   count: number;
   data: Listener[];
+}
+
+export interface QueryLogEntry {
+  time: string;
+  client: string;
+  domain: string;
+  query_type: string;
+  elapsed_ms: number;
+  result: string;
+  speed_ms?: number | null;
+  source: string;
+}
+
+export interface QueryLogResponse {
+  total: number;
+  data: QueryLogEntry[];
+}
+
+export interface QueryLogParams {
+  limit?: number;
+  offset?: number;
+  domain?: string;
+  client?: string;
+  qtype?: string;
+}
+
+export interface NameCount {
+  name: string;
+  count: number;
+  avg_time_ms: number;
 }
 
 export interface AddressEntry {
@@ -202,6 +243,42 @@ export function useNameservers() {
   return useQuery({
     queryKey: nameserversKeys,
     queryFn: () => apiGet<NameserversResponse>("/api/nameservers"),
+    refetchInterval: 5000,
+  });
+}
+
+export function useQueryLog(params: QueryLogParams = {}, autoRefresh = true) {
+  const { limit, offset, domain, client, qtype } = params;
+  const query = new URLSearchParams();
+  if (limit != null) query.set("limit", String(limit));
+  if (offset != null) query.set("offset", String(offset));
+  if (domain) query.set("domain", domain);
+  if (client) query.set("client", client);
+  if (qtype) query.set("qtype", qtype);
+  const qs = query.toString();
+
+  return useQuery({
+    queryKey: ["query-log", limit, offset, domain, client, qtype, autoRefresh],
+    queryFn: () =>
+      apiGet<QueryLogResponse>(`/api/query-log${qs ? `?${qs}` : ""}`),
+    refetchInterval: autoRefresh ? 5000 : false,
+  });
+}
+
+export function useTopDomains(limit = 10) {
+  return useQuery({
+    queryKey: ["top-domains", limit],
+    queryFn: () =>
+      apiGet<NameCount[]>(`/api/stats/top-domains?limit=${limit}`),
+    refetchInterval: 10000,
+  });
+}
+
+export function useClients(limit = 10) {
+  return useQuery({
+    queryKey: ["clients", limit],
+    queryFn: () => apiGet<NameCount[]>(`/api/stats/clients?limit=${limit}`),
+    refetchInterval: 10000,
   });
 }
 

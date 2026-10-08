@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+### feat(webui): 对标原版 smartdns WebUI——查询日志页面与上游运行统计
+
+**新增能力**（对标原版 smartdns WebUI 的日志中心与上游统计）：
+
+- **查询日志页面**（新导航项"查询日志"）：展示最近 1000 条查询记录（内存环形缓冲，非持久化，重启清空），支持域名/客户端/记录类型过滤、自动刷新开关（5s）与手动刷新。
+- **上游服务器页面增强**：每台上游展示 IP、端口、协议（UDP/TCP/DoT/DoH/DoQ/DoH3）、安全性（加密/明文）、运行状态（正常/异常）、查询次数、成功次数、失败次数、平均耗时、成功率（进度条），并新增总查询/总成功/总失败与总体成功率汇总卡片。
+- **总览页新增**：热门域名 Top 10、活跃客户端 Top 10 排行。
+
+**后端实现**：
+
+- `dns_client.rs`：`NameServer` 增加原子计数器（query/success/failure/total_time_ns），在查询终态（成功/ServFail/busy/超时/连接错误）记录；被组内竞速 cancel 的请求不计数，保证 `查询次数 = 成功 + 失败`。新增 `default_server_group()`/`named_server_groups()` 公开访问器。
+- `dns_mw_audit.rs`：审计中间件重构为始终注册——内存环形缓冲（`QUERY_LOG_MAX=1000`）始终写入供 WebUI 使用，磁盘审计文件仅在 `audit-enable` 时写入。
+- `app.rs`：`AppState` 持有 `DnsClient` 句柄与查询日志环形缓冲，重载配置时同步更新。
+- 新增 API：`/api/query-log`（支持 limit/offset/domain/client/qtype 过滤）、`/api/stats/top-domains`、`/api/stats/clients`、`/api/stats/query-types`；`/api/nameservers` 响应扩展为含运行统计的完整模型。
+- 前端（`webui/`）：`lib/api.ts` 新增 `useQueryLog`/`useTopDomains`/`useClients`，仪表盘新增 `querylog` 页签；`webui/out` 产物随仓库更新。
+
+**注意**：`utoipa_axum::routes!` 多 handler 形式存在路径合并冲突（panic "Overlapping method route"），统计路由改为单 handler `routes!` 后 `merge` 的方式注册。
+
 ### ci(docker): 为 build-docker 添加 packages:write 权限，修复 ghcr.io 推送被拒
 
 `build-docker` job 推送镜像到 ghcr.io 时报 `denied: installation not allowed to Write organization package`——workflow 级 `permissions` 仅声明 `contents: write`，缺少 `packages: write`。给 `build-docker` job 单独添加 `permissions: { contents: read, packages: write }`（job 级覆盖 workflow 级，遵循最小权限）。

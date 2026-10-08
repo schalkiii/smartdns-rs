@@ -1,5 +1,6 @@
+use std::sync::Mutex as StdMutex;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     ops::DerefMut,
     sync::{
         Arc,
@@ -18,6 +19,7 @@ use crate::{
     dns_client::DnsClient,
     dns_conf::RuntimeConfig,
     dns_mw::{DnsMiddlewareBuilder, DnsMiddlewareHandler},
+    dns_mw_audit::{QUERY_LOG_MAX, QueryLogEntry},
     dns_mw_cache::DnsCache,
     log,
     server::{DnsHandle, IncomingDnsRequest, ServerHandle},
@@ -61,6 +63,8 @@ impl App {
                     bg_total_queries: AtomicU64::new(0),
                     bg_total_query_time_ns: AtomicU64::new(0),
                     stats_history: Mutex::const_new(Vec::new()),
+                    dns_client: RwLock::new(None),
+                    query_log: Arc::new(StdMutex::new(VecDeque::with_capacity(QUERY_LOG_MAX))),
                     guard: AppGuard,
                 }
                 .into(),
@@ -74,6 +78,16 @@ impl App {
 
     pub async fn cfg(&self) -> Arc<RuntimeConfig> {
         self.cfg.read().await.clone()
+    }
+
+    /// 运行期上游客户端句柄（用于 WebUI 上游统计）。重载配置后更新。
+    pub async fn dns_client(&self) -> Option<Arc<DnsClient>> {
+        self.dns_client.read().await.clone()
+    }
+
+    /// WebUI 查询日志环形缓冲（内存，非持久化）。
+    pub fn query_log(&self) -> Arc<StdMutex<VecDeque<QueryLogEntry>>> {
+        self.query_log.clone()
     }
 
     pub async fn reload(&self) -> anyhow::Result<()> {
@@ -264,14 +278,17 @@ impl App {
     async fn update_middleware_handler(&self) {
         let cfg = self.cfg.read().await.clone();
         let mut cache = self.cache.write().await;
+        let dns_client = cfg.create_dns_client().await;
         let middleware_handler = build_middleware(
             &cfg,
             &self.dns_handle,
-            cfg.create_dns_client().await,
+            dns_client.clone(),
             &mut cache,
+            self.query_log.clone(),
         );
 
         *self.mw_handler.write().await = middleware_handler;
+        *self.dns_client.write().await = Some(Arc::new(dns_client));
     }
 }
 
@@ -301,6 +318,10 @@ pub struct AppState {
     bg_total_queries: AtomicU64,
     bg_total_query_time_ns: AtomicU64,
     stats_history: Mutex<Vec<StatsSnapshot>>,
+    /// 运行期上游客户端句柄（用于 WebUI 上游统计）。
+    dns_client: RwLock<Option<Arc<DnsClient>>>,
+    /// WebUI 查询日志环形缓冲（内存，非持久化）。
+    query_log: Arc<StdMutex<VecDeque<QueryLogEntry>>>,
     guard: AppGuard,
 }
 
@@ -638,6 +659,7 @@ fn build_middleware(
     dns_handle: &DnsHandle,
     dns_client: DnsClient,
     dns_cache: &mut Option<Arc<DnsCache>>,
+    query_log: Arc<StdMutex<VecDeque<QueryLogEntry>>>,
 ) -> Arc<DnsMiddlewareHandler> {
     use crate::dns_mw_addr::AddressMiddleware;
     use crate::dns_mw_audit::DnsAuditMiddleware;
@@ -654,14 +676,22 @@ fn build_middleware(
     let middleware_handler = {
         let mut builder = DnsMiddlewareBuilder::new();
 
-        // check if audit enabled.
-        if cfg.audit_enable() && cfg.audit_file().is_some() {
+        // 审计中间件：始终注册以填充 WebUI 查询日志环形缓冲；仅在启用审计文件时写入磁盘。
+        let audit_file = if cfg.audit_enable() {
+            cfg.audit_file().map(|p| p.to_path_buf())
+        } else {
+            None
+        };
+        if audit_file.is_some() {
             builder = builder.with(DnsAuditMiddleware::new(
-                cfg.audit_file().unwrap(),
+                query_log.clone(),
+                audit_file,
                 cfg.audit_size(),
                 cfg.audit_num(),
-                cfg.audit_file_mode().into(),
+                Some(cfg.audit_file_mode()),
             ));
+        } else {
+            builder = builder.with(DnsAuditMiddleware::new(query_log.clone(), None, 0, 0, None));
         }
 
         if cfg.rule_groups().values().any(|x| !x.cnames.is_empty()) {

@@ -134,6 +134,20 @@ impl NameServerInfo {
     pub fn enabled(&self) -> bool {
         self.enabled.unwrap_or(true)
     }
+
+    /// 用于把运行期统计与配置项关联的规范化键（按地址 + 分组 + 关键标志）。
+    pub fn stats_key(&self) -> String {
+        format!(
+            "{}|{}|{}|{}|{}|{}|{}",
+            self.server,
+            self.group.join(","),
+            self.blacklist_ip,
+            self.whitelist_ip,
+            self.check_edns,
+            self.exclude_default_group,
+            self.bootstrap_dns,
+        )
+    }
 }
 
 impl std::fmt::Display for NameServerInfo {

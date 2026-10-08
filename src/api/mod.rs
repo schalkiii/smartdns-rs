@@ -21,6 +21,7 @@ mod listener;
 mod log;
 mod nameserver;
 mod openapi;
+mod query_log;
 mod serve_dns;
 mod stats;
 mod system;
@@ -95,6 +96,7 @@ fn api_routes() -> StatefulRouter {
         .merge(log::routes())
         .merge(system::routes())
         .merge(stats::routes())
+        .merge(query_log::routes())
 }
 
 async fn version() -> Json<&'static str> {

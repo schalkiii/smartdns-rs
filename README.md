@@ -84,7 +84,7 @@ This project is a **Rust reimplementation** of [SmartDNS](https://github.com/pym
 
 - **Web UI Dashboard**
 
-  Built-in web dashboard with a single-page tabbed interface for real-time monitoring and management. Supports system overview, upstream server inspection, cache management with search/flush, and rule management with address/forward CRUD.
+  Built-in web dashboard with a single-page tabbed interface for real-time monitoring and management. Supports system overview (with top domains/clients ranking), upstream server inspection (per-server IP/port/protocol/security/status/query counts/success rate/average time), query log browsing with filters, cache management with search/flush, and rule management with address/forward CRUD.
 
 Note: The C version of smartdns is very functional, but because it only supports **Linux**, while **MacOS and Windows** can only be supported through Docker or WSL. Therefore, I want to develop a rust version of SmartDNS that supports compiling to Windows, MacOS, Linux and Android Termux environment to run, and is compatible with its configuration.
 
@@ -245,10 +245,11 @@ SmartDNS-rs includes an embedded web dashboard accessible over HTTP. It provides
 
 | Tab                       | Description                                                                                                                            |
 | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| **系统概览 (Overview)**   | Uptime, cache hit rate, average query time, total/active queries, cache entry count, query trend area chart, top cache entries.        |
-| **上游服务器 (Upstream)** | List of configured upstream DNS servers with protocol labels, listener port configuration.                                             |
+| **系统概览 (Overview)**   | Uptime, cache hit rate, average query time, total/active queries, cache entry count, query trend area chart, top cache entries, top domains & active clients ranking.        |
+| **上游服务器 (Upstream)** | Configured upstream DNS servers with IP, port, protocol (UDP/TCP/DoT/DoH/DoQ/DoH3), security (encrypted/plaintext), runtime status, query/success/failure counts, average response time and success rate, plus aggregate totals. Listener port configuration. |
 | **缓存管理 (Cache)**      | Cache size limit, current entry count, searchable cache entry table with hit counts and last access timestamps, one-click cache flush. |
 | **规则管理 (Rules)**      | Address rules (domain → IP mapping) and forward rules management. Supports creating new rules via dialog and deleting existing ones.   |
+| **查询日志 (Query Log)**  | Most recent 1000 queries (in-memory ring buffer, cleared on restart) with domain/client/record-type filters, auto-refresh toggle and manual refresh. |
 
 ### Key Metrics
 

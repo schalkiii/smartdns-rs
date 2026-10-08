@@ -5,7 +5,7 @@ use std::{
     slice::Iter,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicU32, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -308,6 +308,7 @@ impl DnsClientBuilder {
     }
 }
 
+#[derive(Clone)]
 pub struct DnsClient {
     default: Arc<NameServerGroup>,
     bootstrap: Arc<BootstrapResolver>,
@@ -317,6 +318,16 @@ pub struct DnsClient {
 impl DnsClient {
     pub fn builder() -> DnsClientBuilder {
         DnsClientBuilder::default()
+    }
+
+    /// 默认上游组（公开的只读访问，避免与 `Deref` 目标字段冲突）。
+    pub fn default_server_group(&self) -> Arc<NameServerGroup> {
+        self.default.clone()
+    }
+
+    /// 命名上游组映射（公开的只读访问）。
+    pub fn named_server_groups(&self) -> &HashMap<String, Arc<NameServerGroup>> {
+        &self.servers
     }
 
     pub async fn default(&self) -> Arc<NameServerGroup> {
@@ -540,6 +551,13 @@ mod name_server {
         // 熔断状态：连续失败计数 + 最近一次失败时间（用于冷却跳过）
         fail_streak: AtomicU32,
         last_failure: Mutex<Option<Instant>>,
+        // 配置快照（用于 WebUI 关联统计与展示）
+        info: NameServerInfo,
+        // 运行期统计（原子计数，只读访问无需加锁）
+        query_count: AtomicU64,
+        success_count: AtomicU64,
+        failure_count: AtomicU64,
+        total_time_ns: AtomicU64,
     }
 
     impl NameServer {
@@ -551,6 +569,7 @@ mod name_server {
             default_client_subnet: Option<ClientSubnet>,
         ) -> anyhow::Result<Self> {
             let url = &config.server;
+            let info = config.clone();
 
             if !url.has_ip() && resolver.is_none() {
                 anyhow::bail!("Parameter resolver is required for non-ip upstream");
@@ -610,6 +629,11 @@ mod name_server {
                 semaphore: Arc::new(Semaphore::new(PER_NAMESERVER_CONCURRENCY)),
                 fail_streak: AtomicU32::new(0),
                 last_failure: Mutex::new(None),
+                info,
+                query_count: AtomicU64::new(0),
+                success_count: AtomicU64::new(0),
+                failure_count: AtomicU64::new(0),
+                total_time_ns: AtomicU64::new(0),
             })
         }
 
@@ -634,6 +658,65 @@ mod name_server {
         fn record_failure(&self) {
             self.fail_streak.fetch_add(1, Ordering::Relaxed);
             *self.last_failure.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+        }
+
+        /// 记录一次成功并累加耗时（ns）。
+        ///
+        /// 仅在查询到达终态时调用：被组内 cancel 的竞速落败请求不会走到这里，
+        /// 因此 query_count 语义为"已完成查询数"（= 成功 + 失败）。
+        fn record_success_time(&self, took: Duration) {
+            self.query_count.fetch_add(1, Ordering::Relaxed);
+            self.success_count.fetch_add(1, Ordering::Relaxed);
+            self.total_time_ns
+                .fetch_add(took.as_nanos() as u64, Ordering::Relaxed);
+        }
+
+        /// 记录一次失败（含 busy/超时/连接错误）并累加耗时（ns）。
+        fn record_failure_time(&self, took: Duration) {
+            self.query_count.fetch_add(1, Ordering::Relaxed);
+            self.failure_count.fetch_add(1, Ordering::Relaxed);
+            self.total_time_ns
+                .fetch_add(took.as_nanos() as u64, Ordering::Relaxed);
+        }
+
+        /// 累计查询次数（已建立一次上游查询尝试）。
+        pub fn query_count(&self) -> u64 {
+            self.query_count.load(Ordering::Relaxed)
+        }
+
+        /// 累计成功次数（上游返回非 ServFail/Refused 响应）。
+        pub fn success_count(&self) -> u64 {
+            self.success_count.load(Ordering::Relaxed)
+        }
+
+        /// 累计失败次数（busy/超时/连接错误/ServFail/Refused）。
+        pub fn failure_count(&self) -> u64 {
+            self.failure_count.load(Ordering::Relaxed)
+        }
+
+        /// 平均响应耗时（毫秒）。
+        pub fn avg_time_ms(&self) -> f64 {
+            let q = self.query_count.load(Ordering::Relaxed);
+            if q == 0 {
+                0.0
+            } else {
+                self.total_time_ns.load(Ordering::Relaxed) as f64 / q as f64 / 1_000_000.0
+            }
+        }
+
+        /// 累计耗时（纳秒），用于跨上游聚合。
+        pub fn total_time_ns(&self) -> u64 {
+            self.total_time_ns.load(Ordering::Relaxed)
+        }
+
+        /// 上游是否处于熔断冷却（视为异常/不可用状态）。
+        pub fn is_failing(&self) -> bool {
+            self.in_cooldown()
+        }
+
+        /// 关联的服务器配置快照。
+        pub fn info(&self) -> &NameServerInfo {
+            &self.info
         }
 
         pub async fn warmup(&self) -> Result<(), ProtoError> {
@@ -671,6 +754,9 @@ mod name_server {
                 log::debug!("[ns] {} {} in cooldown, skipping", query_name, query_type,);
                 return Err(ProtoErrorKind::NoConnections.into());
             }
+
+            // 进入实际查询：开始计时（查询/成功/失败计数在终态统一记录）。
+            let start = Instant::now();
 
             let client_subnet = options.client_subnet.or(self.options().client_subnet);
 
@@ -736,9 +822,16 @@ mod name_server {
                         // SERVFAIL/REFUSED 是有效的 DNS 响应，但仍视为上游失败：
                         // 记录失败以触发熔断冷却，避免对持续出错的上游反复空耗。
                         // 响应本身仍回传（无记录），由 NameServerGroup 继续尝试其它上游。
+                        let took = start.elapsed();
                         match response.response_code() {
-                            ResponseCode::ServFail | ResponseCode::Refused => self.record_failure(),
-                            _ => self.record_success(),
+                            ResponseCode::ServFail | ResponseCode::Refused => {
+                                self.record_failure();
+                                self.record_failure_time(took);
+                            }
+                            _ => {
+                                self.record_success();
+                                self.record_success_time(took);
+                            }
                         }
                         return Ok(From::<Message>::from(response.into()));
                     }
@@ -753,6 +846,7 @@ mod name_server {
                             query_name,
                             query_type,
                         );
+                        self.record_failure_time(start.elapsed());
                         return Err(err.into());
                     }
                     Err(err)
@@ -775,6 +869,7 @@ mod name_server {
                     Err(err) => {
                         // 非重试错误（含连接超时）：计入失败，触发熔断冷却。
                         self.record_failure();
+                        self.record_failure_time(start.elapsed());
                         return Err(err.into());
                     }
                 }
