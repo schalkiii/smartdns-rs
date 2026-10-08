@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v0.13.3] - 2026-10-08
+
 ### feat(webui): 对标原版 smartdns WebUI——查询日志页面与上游运行统计
 
 **新增能力**（对标原版 smartdns WebUI 的日志中心与上游统计）：
