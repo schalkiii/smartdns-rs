@@ -1066,6 +1066,11 @@ mod bootstrap {
     }
 }
 
+// async_trait 宏展开的生成函数会触发 clippy::double_must_use（宏产物误报，非人为标注）。
+#[expect(
+    clippy::double_must_use,
+    reason = "async_trait 生成函数触发，宏产物误报"
+)]
 #[async_trait::async_trait]
 pub trait GenericResolver {
     fn options(&self) -> &ResolverOpts;
@@ -1087,6 +1092,10 @@ pub trait GenericResolver {
     ) -> Result<DnsResponse, LookupError>;
 }
 
+#[expect(
+    clippy::double_must_use,
+    reason = "async_trait 生成函数触发，宏产物误报"
+)]
 #[async_trait::async_trait]
 pub trait GenericResolverExt {
     /// Performs a dual-stack DNS lookup for the IP for the given hostname.

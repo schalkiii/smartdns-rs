@@ -3,6 +3,11 @@ use std::sync::Arc;
 use futures::future::{BoxFuture, FutureExt};
 use std::result::Result;
 
+// async_trait 宏展开的生成函数会触发 clippy::double_must_use（宏产物误报，非人为标注）。
+#[expect(
+    clippy::double_must_use,
+    reason = "async_trait 生成函数触发，宏产物误报"
+)]
 #[async_trait::async_trait]
 pub trait Middleware<TCtx: Send, TReq: Sync, TRes, TErr>: Send + Sync {
     #[inline]
@@ -38,6 +43,10 @@ where
     }
 }
 
+#[expect(
+    clippy::double_must_use,
+    reason = "async_trait 生成函数触发，宏产物误报"
+)]
 #[async_trait::async_trait]
 pub trait MiddlewareDefaultHandler<TCtx, TReq, TRes, TErr>: Send + Sync {
     async fn handle(&self, ctx: &mut TCtx, req: &TReq) -> Result<TRes, TErr>;
