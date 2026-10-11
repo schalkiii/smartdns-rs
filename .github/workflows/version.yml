@@ -11,6 +11,13 @@ on:
         options: [major, minor, patch, rc, beta, alpha]
         default: 'patch'
 
+# 本仓库 Actions 的默认 GITHUB_TOKEN 权限是 read，而 bump job 需要把版本提交与 tag 推回
+# main（Push changes 步骤），不显式声明就会以 403 "Resource not accessible by integration" 失败。
+# packages:write 是 build job 调用 build.yml 时所需的权限天花板，必须在此一并放开。
+permissions:
+  contents: write
+  packages: write
+
 jobs:
   bump:
     runs-on: ubuntu-latest

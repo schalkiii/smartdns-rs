@@ -47,6 +47,9 @@ release 时会互相覆盖，导致部分平台的安装包没有出现在 relea
 - `Cross.toml`：为通过构建的 `armv7-linux-androideabi` 固定 cross 镜像。
 - `version.yml`：调用 `build.yml` 的 job 显式声明 `contents:write` + `packages:write`——
   caller 的权限是 reusable workflow 的天花板，缺失会触发 `startup_failure`。
+- `version.yml`：补 workflow 级 `permissions: contents: write`。本仓库 Actions 的默认 token 权限是
+  `read`，而 bump job 要把版本提交和 tag 推回 main，此前 "Push changes" 步骤必然 403
+  （所以 v0.13.3 是手工 `chore(release)` 提交的，该工作流在此 fork 从未跑通过）。
 - `README.md` / `README_zh-CN.md`：安装章节新增平台资产对照表与 `SHA256SUMS` 校验说明。
 - `AGENTS.md`：新增 Release & Packaging 章节，固化"禁止在 build 矩阵 job 内直接发布"的约束。
 
