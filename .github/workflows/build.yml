@@ -62,15 +62,9 @@ jobs:
           - target: aarch64-pc-windows-msvc
             os: windows-latest
             archive: zip
-          # MinGW 构建，只出 zip：wix.wxs 的 Package/Component 是写死的，
-          # GNU 与 MSVC 安装包共用同一 UpgradeCode，同版本安装会互相覆盖。
-          - target: x86_64-pc-windows-gnu
-            os: windows-latest
-            archive: zip
-            optional: true
-          # - target: i686-pc-windows-gnu  # error: linker `i686-w64-mingw32-gcc` not found
-          #   os: windows-latest
-          #   archive: zip
+          # 不做 windows-gnu 目标：runner 上缺 MinGW linker（x86_64 需额外装、i686 直接找不到
+          # `i686-w64-mingw32-gcc`），且 wix.wxs 的 Package/Component 写死，GNU 安装包会与
+          # MSVC 版共用同一 UpgradeCode 而互相覆盖安装。
           # ---------------- macOS ----------------
           - target: x86_64-apple-darwin
             os: macos-latest
@@ -95,7 +89,6 @@ jobs:
           - target: i686-unknown-linux-musl
             os: ubuntu-latest
             archive: tar.gz tar.xz tar.zst
-            optional: true
           - target: arm-unknown-linux-musleabi
             os: ubuntu-latest
             archive: tar.gz tar.xz tar.zst
@@ -105,11 +98,6 @@ jobs:
           - target: armv7-unknown-linux-musleabihf
             os: ubuntu-latest
             archive: tar.gz tar.xz tar.zst
-            optional: true
-          - target: riscv64gc-unknown-linux-musl
-            os: ubuntu-latest
-            archive: tar.gz tar.xz tar.zst
-            optional: true
           # ---------------- Android ----------------
           - target: aarch64-linux-android
             os: ubuntu-latest
@@ -117,22 +105,15 @@ jobs:
           - target: armv7-linux-androideabi
             os: ubuntu-latest
             archive: tar.gz tar.xz tar.zst
-            optional: true
-          - target: x86_64-linux-android
-            os: ubuntu-latest
-            archive: tar.gz tar.xz tar.zst
-            optional: true
+          # x86_64-linux-android / riscv64gc-unknown-linux-musl / x86_64-unknown-freebsd
+          # 曾以 optional 加入，构建连续失败后已移除：交叉工具链未验证通过前不进 release 矩阵。
           # - target: arch64-unknown-linux-musl
           #   archive: tar.gz tar.xz tar.zst
           # - target: mips-unknown-linux-musl
           #   archive: tar.gz tar.xz tar.zst
           # - target: mips64-unknown-linux-muslabi64
           #   archive: tar.gz tar.xz tar.zst
-          # ---------------- 其它 Unix ----------------
-          - target: x86_64-unknown-freebsd
-            os: ubuntu-latest
-            archive: tar.gz tar.xz tar.zst
-            optional: true
+          # ---------------- 其它（未启用，交叉工具链尚未验证） ----------------
           # - target: x86_64-unknown-netbsd
           #   os: ubuntu-latest
           #   archive: tar.gz tar.xz tar.zst
@@ -140,7 +121,8 @@ jobs:
           #   archive: tar.gz tar.xz tar.zst
 
     runs-on: ${{matrix.os}}
-    # optional 目标（新增工具链 / 交叉镜像尚未长期验证）失败时不阻塞 release job
+    # 目前矩阵内目标全部稳定通过，没有条目使用 optional；保留该开关是为了以后新增未验证目标时
+    # 先以 optional 试跑，失败不阻塞 release job（x86_64-pc-windows-gnu 就是这么被隔离的）。
     continue-on-error: ${{ matrix.optional == true }}
     steps:
       - name: Checkout
@@ -153,23 +135,6 @@ jobs:
         with:
           rust_target: ${{ matrix.target }}
 
-      # windows-latest 默认只有 MSVC 工具链，gnu 目标需要额外装 MinGW gcc
-      - name: Install MinGW toolchain
-        if: ${{ endsWith(matrix.target, '-windows-gnu') }}
-        shell: pwsh
-        run: |
-          choco install mingw --no-progress -y
-          $gcc = Get-ChildItem 'C:\ProgramData\chocolatey\lib\mingw' -Recurse `
-              -Filter 'x86_64-w64-mingw32-gcc.exe' -ErrorAction SilentlyContinue |
-              Select-Object -First 1
-          if (-not $gcc) {
-            Write-Error 'MinGW gcc not found after chocolatey install'
-            exit 1
-          }
-          # GITHUB_PATH 只对后续 step 生效，写入后才能让 cargo 找到 linker
-          Add-Content -Path $env:GITHUB_PATH -Value $gcc.DirectoryName
-          & $gcc.FullName --version
-
       - name: Build
         run: just build --release --no-default-features --features ${{ inputs.features }} --target=${{ matrix.target }}
         env:
@@ -178,11 +143,6 @@ jobs:
       - name: Package
         run: just target=${{ matrix.target }} pack
         shell: bash
-
-      - name: Keep zip only for windows-gnu
-        if: ${{ endsWith(matrix.target, '-windows-gnu') }}
-        shell: bash
-        run: rm -f dist/*.msi dist/*.msi-sha256sum.txt
 
       - name: Compute release label
         id: release_label

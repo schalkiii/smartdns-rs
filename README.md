@@ -134,20 +134,19 @@ Release assets cover the targets below. Every package is published together with
 sha256sum -c SHA256SUMS-<version>.txt
 ```
 
+Every package also contains a ready-to-use `smartdns.conf` plus `example.conf`, the fully
+commented reference for all options.
+
 | Platform | Target triple | Packages |
 | :--- | :--- | :--- |
 | Windows x64 | `x86_64-pc-windows-msvc` | `.msi`, `.zip` |
 | Windows x86 (32-bit) | `i686-pc-windows-msvc` | `.msi`, `.zip` |
 | Windows ARM64 | `aarch64-pc-windows-msvc` | `.msi`, `.zip` |
-| Windows x64 (MinGW, no VC runtime) | `x86_64-pc-windows-gnu` * | `.zip` |
 | macOS Intel | `x86_64-apple-darwin` | `.zip` |
 | macOS Apple Silicon | `aarch64-apple-darwin` | `.zip` |
 | Linux (glibc) | `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu` | `.tar.gz` |
-| Linux (musl, static — OpenWrt/routers) | `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, `arm-unknown-linux-musleabi`, `arm-unknown-linux-musleabihf`, `i686-unknown-linux-musl` *, `armv7-unknown-linux-musleabihf` *, `riscv64gc-unknown-linux-musl` * | `.tar.gz` |
-| Android | `aarch64-linux-android`, `armv7-linux-androideabi` *, `x86_64-linux-android` * | `.tar.gz` |
-| FreeBSD | `x86_64-unknown-freebsd` * | `.tar.gz` |
-
-Targets marked `*` are best-effort: they are allowed to fail without blocking the rest of the release.
+| Linux (musl, static — OpenWrt/routers) | `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, `i686-unknown-linux-musl`, `arm-unknown-linux-musleabi`, `arm-unknown-linux-musleabihf`, `armv7-unknown-linux-musleabihf` | `.tar.gz` |
+| Android | `aarch64-linux-android`, `armv7-linux-androideabi` | `.tar.gz` |
 
 - MacOS
 

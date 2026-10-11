@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v0.13.4] - 2026-10-11
+
 ### feat(conf): 发行包与服务安装默认配置改为开箱即用
 
 原来 `etc/smartdns/smartdns.conf` 是上游 C SmartDNS 那份几乎全是注释的模板，有效指令只有
@@ -36,13 +38,13 @@ release 时会互相覆盖，导致部分平台的安装包没有出现在 relea
   artifact，一次性发布到同一个 release。
 - `release` job 汇总所有安装包生成 `SHA256SUMS-<version>.txt`，并从 `CHANGELOG.md` 抽取对应
   版本段落作为 release 正文；抽取不到时保留原有正文不覆盖。
-- `build.yml`：目标矩阵扩展为 19 个，新增 `x86_64-pc-windows-gnu`、`i686-unknown-linux-musl`、
-  `armv7-unknown-linux-musleabihf`、`riscv64gc-unknown-linux-musl`、`armv7-linux-androideabi`、
-  `x86_64-linux-android`、`x86_64-unknown-freebsd`；新目标标记 `optional`，经 job 级
-  `continue-on-error` 隔离，失败不阻塞发版。
-- `build.yml`：`*-windows-gnu` 目标只保留 zip 并删除生成的 msi——`wix.wxs` 的 Package 与
-  Component GUID 是写死的，GNU 安装包会与 MSVC 安装包共用 UpgradeCode 而互相覆盖安装。
-- `Cross.toml`：为新增的 `armv7-linux-androideabi`、`x86_64-linux-android` 固定 cross 镜像。
+- `build.yml`：目标矩阵扩为 15 个，新增并通过的有 `i686-unknown-linux-musl`、
+  `armv7-unknown-linux-musleabihf`、`armv7-linux-androideabi`。另有一批目标以 `optional`
+  （映射到 job 级 `continue-on-error`）试加后连续构建失败，已移出矩阵：
+  `x86_64-pc-windows-gnu`（runner 缺 MinGW linker；且 `wix.wxs` 的 Package 与 Component GUID
+  写死，GNU 安装包会与 MSVC 版共用 UpgradeCode 互相覆盖安装）、`riscv64gc-unknown-linux-musl`、
+  `x86_64-unknown-freebsd`、`x86_64-linux-android`。`optional` 机制保留，供以后新目标试跑时隔离。
+- `Cross.toml`：为通过构建的 `armv7-linux-androideabi` 固定 cross 镜像。
 - `version.yml`：调用 `build.yml` 的 job 显式声明 `contents:write` + `packages:write`——
   caller 的权限是 reusable workflow 的天花板，缺失会触发 `startup_failure`。
 - `README.md` / `README_zh-CN.md`：安装章节新增平台资产对照表与 `SHA256SUMS` 校验说明。

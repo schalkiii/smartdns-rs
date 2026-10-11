@@ -136,20 +136,18 @@ _夜构建版本可在[这里](https://github.com/schalkiii/smartdns-rs/actions/
 sha256sum -c SHA256SUMS-<version>.txt
 ```
 
+每个安装包内同时附带可直接使用的 `smartdns.conf`，以及列出全部选项、带完整注释的参考文件 `example.conf`。
+
 | 平台 | 目标三元组 | 安装包 |
 | :--- | :--- | :--- |
 | Windows x64 | `x86_64-pc-windows-msvc` | `.msi`、`.zip` |
 | Windows x86（32 位） | `i686-pc-windows-msvc` | `.msi`、`.zip` |
 | Windows ARM64 | `aarch64-pc-windows-msvc` | `.msi`、`.zip` |
-| Windows x64（MinGW，不依赖 VC 运行库） | `x86_64-pc-windows-gnu` * | `.zip` |
 | macOS Intel | `x86_64-apple-darwin` | `.zip` |
 | macOS Apple Silicon | `aarch64-apple-darwin` | `.zip` |
 | Linux（glibc） | `x86_64-unknown-linux-gnu`、`aarch64-unknown-linux-gnu` | `.tar.gz` |
-| Linux（musl 静态链接，OpenWrt / 路由器） | `x86_64-unknown-linux-musl`、`aarch64-unknown-linux-musl`、`arm-unknown-linux-musleabi`、`arm-unknown-linux-musleabihf`、`i686-unknown-linux-musl` *、`armv7-unknown-linux-musleabihf` *、`riscv64gc-unknown-linux-musl` * | `.tar.gz` |
-| Android | `aarch64-linux-android`、`armv7-linux-androideabi` *、`x86_64-linux-android` * | `.tar.gz` |
-| FreeBSD | `x86_64-unknown-freebsd` * | `.tar.gz` |
-
-标 `*` 的目标为尽力构建（best-effort）：交叉工具链尚未长期验证，个别版本可能缺失对应资产。
+| Linux（musl 静态链接，OpenWrt / 路由器） | `x86_64-unknown-linux-musl`、`aarch64-unknown-linux-musl`、`i686-unknown-linux-musl`、`arm-unknown-linux-musleabi`、`arm-unknown-linux-musleabihf`、`armv7-unknown-linux-musleabihf` | `.tar.gz` |
+| Android | `aarch64-linux-android`、`armv7-linux-androideabi` | `.tar.gz` |
 
 - MacOS
 

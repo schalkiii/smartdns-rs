@@ -553,12 +553,12 @@ Publishing must stay in the single `release` job behind `needs: build`.
 
 Notes on the matrix:
 
-- New targets are flagged `optional: true`, which maps to job-level `continue-on-error`, so an
-  unproven toolchain cannot block the rest of the release. Promote a target to required only
-  after it has shipped successfully a few times.
-- `*-pc-windows-gnu` builds ship zip only: `wix.wxs` hard-codes the `Package` id and component
-  GUIDs, so a GNU installer would share its UpgradeCode with the MSVC one and silently replace it.
-  The workflow deletes the generated `.msi` for those targets.
+- Introduce a new target with `optional: true` (maps to job-level `continue-on-error`) so an
+  unproven toolchain cannot block the release, then drop the flag once it has shipped successfully.
+  No target currently carries it — all 15 entries in the matrix pass.
+- No `*-pc-windows-gnu` target: the runner lacks a MinGW linker, and because `wix.wxs` hard-codes
+  the `Package` id and component GUIDs a GNU installer would share its UpgradeCode with the MSVC
+  one and silently replace it.
 - Asset names are `smartdns-<target>-<version>.<ext>`; `<version>` comes from
   `.github/actions/sanitize-label`, which every job that names or downloads artifacts recomputes
   from the same inputs — keep those call sites in sync.
