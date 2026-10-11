@@ -167,6 +167,8 @@ Targets marked `*` are best-effort: they are allowed to fail without blocking th
 - Windows / Linux
 
   Go to [here](https://github.com/schalkiii/smartdns-rs/releases) to download the package and decompress it.
+  The package ships a ready-to-use `smartdns.conf` — common upstream servers are already configured, so it works without editing — together with `example.conf`, the fully commented reference for every option.
+
   1. Get help
 
      ```shell
@@ -283,6 +285,10 @@ SmartDNS-rs includes an embedded web dashboard accessible over HTTP. It provides
    Pre-built releases and default builds include this feature.
 
 2. **Configure the HTTP listener** in your `smartdns.conf`:
+
+   The shipped default already enables it on loopback only (`bind-http 127.0.0.1:8080`).
+   Use the form below to listen on every interface — the dashboard has no authentication, so
+   only do this on a network you control.
 
    ```conf
    bind-http :8080

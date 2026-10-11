@@ -74,7 +74,7 @@ jobs:
           DIST_DIR="dist/${DIST_NAME}"
           mkdir -p "${DIST_DIR}"
           cp "target/${{ matrix.target }}/release/smartdns${{ matrix.suffix }}" "${DIST_DIR}/"
-          cp LICENSE README.md etc/smartdns/smartdns.conf "${DIST_DIR}/" 2>/dev/null || true
+          cp LICENSE README.md etc/smartdns/smartdns.conf etc/smartdns/example.conf "${DIST_DIR}/" 2>/dev/null || true
           echo "Version: $(cargo pkgid | cut -d@ -f2)" > "${DIST_DIR}/version"
           echo "Build date: $(date)" >> "${DIST_DIR}/version"
           echo "Commit: $(git rev-parse HEAD)" >> "${DIST_DIR}/version"

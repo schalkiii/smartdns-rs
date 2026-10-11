@@ -2022,4 +2022,51 @@ mod tests {
         assert_eq!(cfg.client_rules().len(), 1);
         assert_eq!(cfg.client_rules()[0].group, "office");
     }
+
+    /// 发行包内附带、且由 `service install` 写入系统的默认配置必须逐条可解析：
+    /// 指令名写错只会在装完服务后表现为"解析不了域名"，是最难排查的故障。
+    #[test]
+    fn test_shipped_confs_parse_and_default_conf_is_usable() {
+        for (file, content) in [
+            ("etc/smartdns/smartdns.conf", crate::DEFAULT_CONF),
+            (
+                "etc/smartdns/example.conf",
+                include_str!("../etc/smartdns/example.conf"),
+            ),
+        ] {
+            for line in content.lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+
+                let (rest, item) = parser::parse_config(line)
+                    .map_err(|err| format!("{file} 该行无法解析: {line} -> {err:?}"))
+                    .unwrap();
+
+                assert!(rest.trim().is_empty(), "{file} 该行含未识别参数: {line}");
+                assert!(item.is_some(), "{file} 该行未产生任何配置项: {line}");
+            }
+        }
+
+        let mut builder = RuntimeConfig::builder();
+        for line in crate::DEFAULT_CONF.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            builder = builder.with(line);
+        }
+        let cfg = builder.build().unwrap();
+
+        assert!(!cfg.binds().is_empty(), "默认配置必须包含 DNS 监听");
+        assert!(
+            !cfg.servers().is_empty(),
+            "默认配置必须包含上游 DNS 服务器，否则开箱不可用"
+        );
+        assert!(
+            matches!(cfg.response_mode(), ResponseMode::FastestResponse),
+            "默认配置应使用 fastest-response 以发挥多上游竞速"
+        );
+    }
 }

@@ -4,6 +4,28 @@
 
 ## [Unreleased]
 
+### feat(conf): 发行包与服务安装默认配置改为开箱即用
+
+原来 `etc/smartdns/smartdns.conf` 是上游 C SmartDNS 那份几乎全是注释的模板，有效指令只有
+`bind [::]:53`、`cache-size 32768`、`force-qtype-SOA 65`、`log-level info`——**一个上游服务器都没有**。
+而该文件同时被 `src/main.rs` 以 `include_str!` 编成 `DEFAULT_CONF`，即 `smartdns service install`
+写入系统的配置，也即发行包与 MSI 附带的那份配置，于是"解压即用"其实解析不了任何域名。
+
+- `etc/smartdns/smartdns.conf`：改为参考当前部署配置整理的开箱即用版本——bootstrap 引导组、
+  UDP 兜底（223.5.5.5 / 223.6.6.6 / 114.114.114.119）、加密上游（doh.pub / dns.alidns.com /
+  cloudflare DoH / 8.8.8.8:853 DoT）、`response-mode fastest-response`、`cache-size 65536`、
+  `prefetch-domain` + `serve-expired`、`force-qtype-soa 65`、`log-level info`。
+- Web 管理面板默认只绑回环 `bind-http 127.0.0.1:8080`：面板无鉴权，默认不应暴露到局域网，
+  README 补充了按需开放的说明与风险。
+- `force-aaaa-soa` 以注释形式保留并标注适用条件（IPv6 链路差时再开），纯 IPv6 环境开启会失效。
+- 原模板重命名为 `etc/smartdns/example.conf` 作为完整选项参考，`build.rs` 的模板下载目标同步改到
+  该文件——否则会在新克隆时把整理好的默认配置覆盖回空模板。
+- `justfile` 的 `package-prepare` 与 `web-ui.yml` 的打包清单同时附带 `example.conf`；MSI 经
+  `wix.wxs` 的 `SourceDir/**` 通配自动带上，无需改动。
+- 新增回归测试 `dns_conf::tests::test_shipped_confs_parse_and_default_conf_is_usable`：逐行校验两份
+  配置的非注释指令都能被完整解析（无残留参数），并断言默认配置确实有监听、有上游、且为
+  `fastest-response`。`cargo test` 全绿（322 lib + 10 + 7）。
+
 ### fix(ci): 修复并发发布丢资产，Windows x86_64 包重新进入 release
 
 矩阵中的每个 build job 各自调用 `softprops/action-gh-release` 写同一个 tag，并发写同一

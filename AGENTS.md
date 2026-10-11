@@ -153,6 +153,21 @@ SmartDNS supports:
 - **JSON format** - `config.json`
 - **YAML format** - `config.yaml`
 
+### Shipped Configuration Files
+
+| File | Role |
+| :--- | :--- |
+| `etc/smartdns/smartdns.conf` | Out-of-the-box config. Embedded into the binary as `crate::DEFAULT_CONF` (`src/main.rs`), it is what `smartdns service install` writes to `CONF_PATH` **and** what release packages / the MSI ship. It must contain working upstreams and listeners. |
+| `etc/smartdns/example.conf` | Fully commented option reference. `build.rs::download_resources` fetches it from upstream C SmartDNS when missing; it has no upstream servers, so it is never a usable default. |
+
+⚠️ Keep the template download pointed at `example.conf`. If it points at `smartdns.conf`, a fresh
+clone silently replaces the curated default with the comment-only template — and that same file is
+the one `include_str!` bakes into every binary for `service install`.
+
+`dns_conf::tests::test_shipped_confs_parse_and_default_conf_is_usable` guards both files: every
+non-comment line must parse with no leftover arguments, and the default must yield binds, upstream
+servers and `fastest-response`. Run it after touching either file.
+
 ### Example Configuration (smartdns.conf)
 
 ```conf

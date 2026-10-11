@@ -89,11 +89,13 @@ fn append_text_to_file<P: AsRef<Path> + Copy, T: AsRef<[u8]>>(file_path: P, text
 }
 
 fn download_resources() -> anyhow::Result<()> {
+    // 上游模板只落到 example.conf：etc/smartdns/smartdns.conf 是仓库内维护的开箱即用配置
+    // （同时是 main.rs DEFAULT_CONF，即 service install 写入的内容），不能被上游模板覆盖。
     if download(
         "https://cdn.jsdelivr.net/gh/pymumu/smartdns/etc/smartdns/smartdns.conf",
-        "etc/smartdns/smartdns.conf",
+        "etc/smartdns/example.conf",
     ) {
-        // append_text_to_file("./etc/smartdns/smartdns.conf", "\nconf-file custom.conf\n");
+        // append_text_to_file("./etc/smartdns/example.conf", "\nconf-file custom.conf\n");
     }
 
     download(

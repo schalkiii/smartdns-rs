@@ -169,6 +169,8 @@ sha256sum -c SHA256SUMS-<version>.txt
 - Windows / Linux
 
   前往[这里](https://github.com/schalkiii/smartdns-rs/releases)下载压缩包并解压。
+  压缩包里附带可直接使用的 `smartdns.conf`（已配好常用上游服务器，无需修改即可解析），以及带完整注释、列出全部选项的参考文件 `example.conf`。
+
   1. 获取帮助
 
      ```shell
@@ -285,6 +287,9 @@ SmartDNS-rs 内嵌 Web 仪表盘，可通过 HTTP 访问。它以单页面标签
    预编译的 Release 包与默认构建均包含该特性。
 
 2. **在 `smartdns.conf` 中配置 HTTP 监听**：
+
+   随包附带的默认配置已在回环地址上启用（`bind-http 127.0.0.1:8080`）。下面这种写法会监听所有网卡——
+   管理面板没有鉴权，请仅在可信网络中这样配置。
 
    ```conf
    bind-http :8080
