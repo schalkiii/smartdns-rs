@@ -129,6 +129,28 @@ SmartDNS-rs 🐋 一个是受 [C 语言版 SmartDNS](https://github.com/pymumu/s
 
 _夜构建版本可在[这里](https://github.com/schalkiii/smartdns-rs/actions/workflows/nightly.yml)获取。_
 
+正式版本的发布资产覆盖下表中的目标。每个安装包都会附带自身的 `<file>-sha256sum.txt`，
+同时每个 release 还提供汇总的 `SHA256SUMS-<version>.txt`：
+
+```shell
+sha256sum -c SHA256SUMS-<version>.txt
+```
+
+| 平台 | 目标三元组 | 安装包 |
+| :--- | :--- | :--- |
+| Windows x64 | `x86_64-pc-windows-msvc` | `.msi`、`.zip` |
+| Windows x86（32 位） | `i686-pc-windows-msvc` | `.msi`、`.zip` |
+| Windows ARM64 | `aarch64-pc-windows-msvc` | `.msi`、`.zip` |
+| Windows x64（MinGW，不依赖 VC 运行库） | `x86_64-pc-windows-gnu` * | `.zip` |
+| macOS Intel | `x86_64-apple-darwin` | `.zip` |
+| macOS Apple Silicon | `aarch64-apple-darwin` | `.zip` |
+| Linux（glibc） | `x86_64-unknown-linux-gnu`、`aarch64-unknown-linux-gnu` | `.tar.gz` |
+| Linux（musl 静态链接，OpenWrt / 路由器） | `x86_64-unknown-linux-musl`、`aarch64-unknown-linux-musl`、`arm-unknown-linux-musleabi`、`arm-unknown-linux-musleabihf`、`i686-unknown-linux-musl` *、`armv7-unknown-linux-musleabihf` *、`riscv64gc-unknown-linux-musl` * | `.tar.gz` |
+| Android | `aarch64-linux-android`、`armv7-linux-androideabi` *、`x86_64-linux-android` * | `.tar.gz` |
+| FreeBSD | `x86_64-unknown-freebsd` * | `.tar.gz` |
+
+标 `*` 的目标为尽力构建（best-effort）：交叉工具链尚未长期验证，个别版本可能缺失对应资产。
+
 - MacOS
 
   如果已安装 [brew](https://brew.sh/)，可直接使用以下命令安装。

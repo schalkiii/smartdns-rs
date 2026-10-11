@@ -510,6 +510,46 @@ cd docker && docker build -t smartdns .
 
 ---
 
+## Release & Packaging
+
+Releases are produced entirely by `.github/workflows/build.yml` (reusable; called by
+`version.yml` for tagged releases and by `nightly.yml` for nightly artifacts).
+
+```bash
+# cut a release: bump version, tag, build every target, publish, publish to crates.io
+gh workflow run version.yml -f bump=patch
+
+# rebuild + republish an existing tag (no version bump)
+gh workflow run build.yml --ref main -f version=v0.13.3
+```
+
+Division of labour inside `build.yml`:
+
+| Job | Responsibility |
+| :--- | :--- |
+| `build` | one matrix target each: compile → `just pack` → upload artifact only |
+| `release` | download every artifact, aggregate `SHA256SUMS-<version>.txt`, publish the GitHub Release once |
+| `build-docker` | multi-arch image from the Linux musl artifacts |
+
+⚠️ **Never add a `softprops/action-gh-release` step to the `build` matrix job.** When several
+matrix jobs publish the same tag concurrently, GitHub drops some assets: v0.13.3 lost
+`x86_64-pc-windows-msvc` exactly this way (the job was green and its artifact complete).
+Publishing must stay in the single `release` job behind `needs: build`.
+
+Notes on the matrix:
+
+- New targets are flagged `optional: true`, which maps to job-level `continue-on-error`, so an
+  unproven toolchain cannot block the rest of the release. Promote a target to required only
+  after it has shipped successfully a few times.
+- `*-pc-windows-gnu` builds ship zip only: `wix.wxs` hard-codes the `Package` id and component
+  GUIDs, so a GNU installer would share its UpgradeCode with the MSVC one and silently replace it.
+  The workflow deletes the generated `.msi` for those targets.
+- Asset names are `smartdns-<target>-<version>.<ext>`; `<version>` comes from
+  `.github/actions/sanitize-label`, which every job that names or downloads artifacts recomputes
+  from the same inputs — keep those call sites in sync.
+
+---
+
 ## Troubleshooting
 
 ### Common Issues

@@ -4,6 +4,31 @@
 
 ## [Unreleased]
 
+### fix(ci): 修复并发发布丢资产，Windows x86_64 包重新进入 release
+
+矩阵中的每个 build job 各自调用 `softprops/action-gh-release` 写同一个 tag，并发写同一
+release 时会互相覆盖，导致部分平台的安装包没有出现在 release 上（v0.13.3 的
+`smartdns-x86_64-pc-windows-msvc` 即因此缺失，当时该 job 构建、打包、artifact 全部正常）。
+
+- `build.yml`：build job 只上传 artifact；新增 `release` job 在 `needs: build` 之后下载全部
+  artifact，一次性发布到同一个 release。
+- `release` job 汇总所有安装包生成 `SHA256SUMS-<version>.txt`，并从 `CHANGELOG.md` 抽取对应
+  版本段落作为 release 正文；抽取不到时保留原有正文不覆盖。
+- `build.yml`：目标矩阵扩展为 19 个，新增 `x86_64-pc-windows-gnu`、`i686-unknown-linux-musl`、
+  `armv7-unknown-linux-musleabihf`、`riscv64gc-unknown-linux-musl`、`armv7-linux-androideabi`、
+  `x86_64-linux-android`、`x86_64-unknown-freebsd`；新目标标记 `optional`，经 job 级
+  `continue-on-error` 隔离，失败不阻塞发版。
+- `build.yml`：`*-windows-gnu` 目标只保留 zip 并删除生成的 msi——`wix.wxs` 的 Package 与
+  Component GUID 是写死的，GNU 安装包会与 MSVC 安装包共用 UpgradeCode 而互相覆盖安装。
+- `Cross.toml`：为新增的 `armv7-linux-androideabi`、`x86_64-linux-android` 固定 cross 镜像。
+- `version.yml`：调用 `build.yml` 的 job 显式声明 `contents:write` + `packages:write`——
+  caller 的权限是 reusable workflow 的天花板，缺失会触发 `startup_failure`。
+- `README.md` / `README_zh-CN.md`：安装章节新增平台资产对照表与 `SHA256SUMS` 校验说明。
+- `AGENTS.md`：新增 Release & Packaging 章节，固化"禁止在 build 矩阵 job 内直接发布"的约束。
+
+> 本节为 CI/发布流程变更，不涉及运行时代码；回归测试由 release 资产清单验证
+> （确认 `x86_64/i686/aarch64-pc-windows-msvc` 的 zip 与 msi 同时出现在 release 上）。
+
 ## [v0.13.3] - 2026-10-08
 
 ### feat(webui): 对标原版 smartdns WebUI——查询日志页面与上游运行统计

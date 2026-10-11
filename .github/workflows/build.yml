@@ -35,72 +35,104 @@ on:
 
 # workflow 级 permissions 定义该 workflow 允许的最大权限边界。
 # 作为 reusable workflow 被调用时，调用方传入的 permissions 必须是此处的子集，
-# 否则 GitHub Actions 报 startup_failure。故需同时声明 build job 的 contents:write
+# 否则 GitHub Actions 报 startup_failure。故需同时声明 release job 的 contents:write
 # 与 build-docker job 的 packages:write。
 permissions:
   contents: write
   packages: write
 
 jobs:
+  # 矩阵 job 只负责编译、打包并上传 artifact，发布统一交给 release job。
+  # ⚠️ 禁止在这里直接调用 softprops/action-gh-release：多个 job 并发写同一个 tag 的
+  # release 会互相丢弃资产，v0.13.3 的 x86_64-pc-windows-msvc 包就是这样丢的
+  # （当时 job 全绿、artifact 完整，只有 release 上缺资产）。
   build:
     name: build ${{ matrix.target }} ${{ inputs.version }}
     strategy:
       fail-fast: false
       matrix:
         include:
+          # ---------------- Windows ----------------
           - target: x86_64-pc-windows-msvc
-            os: windows-latest
-            archive: zip
-          # - target: x86_64-pc-windows-gnu
-          #   os: windows-latest
-          #   archive: zip
-          - target: aarch64-pc-windows-msvc
             os: windows-latest
             archive: zip
           - target: i686-pc-windows-msvc
             os: windows-latest
             archive: zip
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+          # MinGW 构建，只出 zip：wix.wxs 的 Package/Component 是写死的，
+          # GNU 与 MSVC 安装包共用同一 UpgradeCode，同版本安装会互相覆盖。
+          - target: x86_64-pc-windows-gnu
+            os: windows-latest
+            archive: zip
+            optional: true
           # - target: i686-pc-windows-gnu  # error: linker `i686-w64-mingw32-gcc` not found
           #   os: windows-latest
           #   archive: zip
+          # ---------------- macOS ----------------
           - target: x86_64-apple-darwin
             os: macos-latest
             archive: zip
           - target: aarch64-apple-darwin
             os: macos-latest
             archive: zip
+          # ---------------- Linux (glibc) ----------------
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz tar.xz tar.zst
           - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz tar.xz tar.zst
+          # ---------------- Linux (musl，静态链接，路由器/OpenWrt 友好) ----------------
+          - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             archive: tar.gz tar.xz tar.zst
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
             archive: tar.gz tar.xz tar.zst
-          # - target: arch64-unknown-linux-musl
-          #   archive: tar.gz tar.xz tar.zst
-          - target: x86_64-unknown-linux-musl
+          - target: i686-unknown-linux-musl
             os: ubuntu-latest
             archive: tar.gz tar.xz tar.zst
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            archive: tar.gz tar.xz tar.zst
+            optional: true
           - target: arm-unknown-linux-musleabi
             os: ubuntu-latest
             archive: tar.gz tar.xz tar.zst
           - target: arm-unknown-linux-musleabihf
             os: ubuntu-latest
             archive: tar.gz tar.xz tar.zst
-          # - target: mips-unknown-linux-musl
+          - target: armv7-unknown-linux-musleabihf
+            os: ubuntu-latest
+            archive: tar.gz tar.xz tar.zst
+            optional: true
+          - target: riscv64gc-unknown-linux-musl
+            os: ubuntu-latest
+            archive: tar.gz tar.xz tar.zst
+            optional: true
+          # ---------------- Android ----------------
+          - target: aarch64-linux-android
+            os: ubuntu-latest
+            archive: tar.gz tar.xz tar.zst
+          - target: armv7-linux-androideabi
+            os: ubuntu-latest
+            archive: tar.gz tar.xz tar.zst
+            optional: true
+          - target: x86_64-linux-android
+            os: ubuntu-latest
+            archive: tar.gz tar.xz tar.zst
+            optional: true
+          # - target: arch64-unknown-linux-musl
           #   archive: tar.gz tar.xz tar.zst
           # - target: mips-unknown-linux-musl
           #   archive: tar.gz tar.xz tar.zst
           # - target: mips64-unknown-linux-muslabi64
           #   archive: tar.gz tar.xz tar.zst
-          - target: aarch64-linux-android
+          # ---------------- 其它 Unix ----------------
+          - target: x86_64-unknown-freebsd
             os: ubuntu-latest
             archive: tar.gz tar.xz tar.zst
-          # - target: x86_64-unknown-freebsd
-          #   os: ubuntu-latest
-          #   archive: tar.gz tar.xz tar.zst
+            optional: true
           # - target: x86_64-unknown-netbsd
           #   os: ubuntu-latest
           #   archive: tar.gz tar.xz tar.zst
@@ -108,8 +140,8 @@ jobs:
           #   archive: tar.gz tar.xz tar.zst
 
     runs-on: ${{matrix.os}}
-    env:
-      DIST_DIR: smartdns-${{ matrix.target }}
+    # optional 目标（新增工具链 / 交叉镜像尚未长期验证）失败时不阻塞 release job
+    continue-on-error: ${{ matrix.optional == true }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -121,6 +153,23 @@ jobs:
         with:
           rust_target: ${{ matrix.target }}
 
+      # windows-latest 默认只有 MSVC 工具链，gnu 目标需要额外装 MinGW gcc
+      - name: Install MinGW toolchain
+        if: ${{ endsWith(matrix.target, '-windows-gnu') }}
+        shell: pwsh
+        run: |
+          choco install mingw --no-progress -y
+          $gcc = Get-ChildItem 'C:\ProgramData\chocolatey\lib\mingw' -Recurse `
+              -Filter 'x86_64-w64-mingw32-gcc.exe' -ErrorAction SilentlyContinue |
+              Select-Object -First 1
+          if (-not $gcc) {
+            Write-Error 'MinGW gcc not found after chocolatey install'
+            exit 1
+          }
+          # GITHUB_PATH 只对后续 step 生效，写入后才能让 cargo 找到 linker
+          Add-Content -Path $env:GITHUB_PATH -Value $gcc.DirectoryName
+          & $gcc.FullName --version
+
       - name: Build
         run: just build --release --no-default-features --features ${{ inputs.features }} --target=${{ matrix.target }}
         env:
@@ -129,6 +178,11 @@ jobs:
       - name: Package
         run: just target=${{ matrix.target }} pack
         shell: bash
+
+      - name: Keep zip only for windows-gnu
+        if: ${{ endsWith(matrix.target, '-windows-gnu') }}
+        shell: bash
+        run: rm -f dist/*.msi dist/*.msi-sha256sum.txt
 
       - name: Compute release label
         id: release_label
@@ -146,24 +200,109 @@ jobs:
             dist/*.zip
             dist/*.tar.gz
             dist/*.msi
-            dist/*.exe
             dist/*sha256sum.txt
 
-      - name: Publish release
-        uses: softprops/action-gh-release@v2.3.2
-        if: ${{ startsWith(inputs.version, 'v') }}
+  # 单点聚合发布：所有目标构建完成后，一次性下载全部 artifact 并发布到同一个 release。
+  # 同时汇总所有资产的 SHA-256，避免用户逐包校验。
+  release:
+    name: release ${{ inputs.version }}
+    if: ${{ startsWith(inputs.version, 'v') }}
+    needs: build
+    runs-on: ubuntu-latest
+    # job 级 permissions 会覆盖 workflow 级，发布 release 需要 contents:write
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.version }}
+
+      - name: Compute release label
+        id: release_label
+        uses: ./.github/actions/sanitize-label
+        with:
+          raw_label: ${{ inputs.version }}
+          fallback_sha: ${{ github.sha }}
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v7
+        with:
+          pattern: smartdns-*-${{ steps.release_label.outputs.value }}
+          path: dist
+          merge-multiple: true
+
+      - name: Summarize assets and release notes
+        id: notes
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          cd dist
+          mapfile -t packages < <(
+            find . -maxdepth 1 -type f \
+              \( -name '*.zip' -o -name '*.tar.gz' -o -name '*.msi' \) \
+              -printf '%f\n' | sort
+          )
+          if [ "${#packages[@]}" -eq 0 ]; then
+            echo "::error::dist/ 下没有任何发布产物，release 中止"
+            exit 1
+          fi
+          sha256sum "${packages[@]}" > "SHA256SUMS-${VERSION}.txt"
+          cd ..
+
+          {
+            echo '## 平台资产'
+            echo
+            for file in "${packages[@]}"; do
+              echo "- \`$file\`"
+            done
+            echo "- \`SHA256SUMS-${VERSION}.txt\`：以上全部文件的 SHA-256 校验和"
+          } > release-body.md
+
+          # 取 CHANGELOG 中本版本段落作为变更说明；取不到就不覆盖 release 原有说明
+          awk -v tag="$VERSION" '
+            index($0, "## [" tag "]") == 1 { in_section = 1; next }
+            in_section && /^## \[/ { exit }
+            in_section { print }
+          ' CHANGELOG.md > release-changelog.md
+
+          if [ -s release-changelog.md ]; then
+            {
+              echo
+              echo '## 变更'
+              echo
+              cat release-changelog.md
+            } >> release-body.md
+            echo "bodyPath=$GITHUB_WORKSPACE/release-body.md" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::CHANGELOG.md 中没有 ${VERSION} 段落，保留 release 原有说明"
+            echo "bodyPath=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2.6.2
+        with:
+          tag_name: ${{ inputs.version }}
+          name: ${{ inputs.version }}
           draft: false
           prerelease: ${{ inputs.prerelease }}
-          tag_name: ${{ inputs.version }}
+          # 预发布版不能标记为 latest，否则 GitHub API 报错
+          make_latest: ${{ inputs.prerelease == false && 'true' || 'false' }}
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          body_path: ${{ steps.notes.outputs.bodyPath }}
           files: |
             dist/*.zip
             dist/*.tar.gz
             dist/*.msi
-            dist/*.exe
-            dist/*sha256sum.txt
+            dist/SHA256SUMS-*.txt
+            dist/*-sha256sum.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   build-docker:
     name: Build Docker image
     runs-on: ubuntu-latest
