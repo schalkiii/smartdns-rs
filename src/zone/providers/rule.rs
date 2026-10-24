@@ -1,5 +1,6 @@
 use crate::config::HttpsRecordRule;
 use crate::dns::*;
+use crate::libdns::proto::rr::rdata::TXT;
 use crate::middleware::Next;
 
 pub struct RuleZoneProvider;
@@ -72,6 +73,25 @@ impl RuleZoneProvider {
                             )));
                         }
                     }
+                }
+            }
+            RecordType::TXT => {
+                if let Some(values) = ctx.domain_rule.get_ref(|r| r.txt.as_ref()) {
+                    let records = values
+                        .iter()
+                        .map(|value| {
+                            Record::from_rdata(
+                                req.query().original().name().to_owned(),
+                                crate::dns_client::MAX_TTL,
+                                RData::TXT(TXT::new(vec![value.clone()])),
+                            )
+                        })
+                        .collect::<Vec<_>>();
+
+                    return Ok(Some(DnsResponse::new_with_max_ttl(
+                        req.query().original().to_owned(),
+                        records,
+                    )));
                 }
             }
             _ => (),

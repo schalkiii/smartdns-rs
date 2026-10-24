@@ -778,6 +778,7 @@ impl RuntimeConfigBuilder {
                 &rule_group.cnames,
                 &rule_group.srv_records,
                 &rule_group.https_records,
+                &rule_group.txt_records,
                 &cfg.nftsets,
             );
             domain_rule_group_map.insert(group_name.to_string(), domain_rule_map);
@@ -1047,6 +1048,7 @@ impl RuntimeConfigBuilder {
                 DnsmasqLeaseFile(v) => self.dnsmasq_lease_file = Some(v),
                 ResolvFile(v) => self.resolv_file = Some(v),
                 SrvRecord(v) => rule_group.srv_records.push(v),
+                TxtRecord(v) => rule_group.txt_records.push(v),
                 DomainRule(v) => rule_group.domain_rules.push(v),
                 ForwardRule(v) => rule_group.forward_rules.push(v),
                 User(v) => self.user = Some(v),
@@ -2067,6 +2069,24 @@ mod tests {
         assert!(
             matches!(cfg.response_mode(), ResponseMode::FastestResponse),
             "默认配置应使用 fastest-response 以发挥多上游竞速"
+        );
+    }
+
+    /// 同一域名的多条 txt-record 必须累积成同一个 TXT RRset（对齐 C 版行为）。
+    #[test]
+    fn test_txt_record_accumulates_per_domain() {
+        let cfg = RuntimeConfig::builder()
+            .with("txt-record /example.com/v=spf1 -all")
+            .with("txt-record /example.com/second value")
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            cfg.domain_rule_group("default")
+                .find(&"example.com".parse().unwrap())
+                .cloned()
+                .get(|rule| rule.txt.clone()),
+            Some(vec!["v=spf1 -all".to_string(), "second value".to_string()])
         );
     }
 }

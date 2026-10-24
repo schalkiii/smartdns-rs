@@ -61,6 +61,7 @@ pub type DomainRules = Vec<ConfigForDomain<DomainRule>>;
 pub type CNameRules = Vec<ConfigForDomain<CNameRule>>;
 pub type SrvRecords = Vec<ConfigForDomain<SRV>>;
 pub type HttpsRecords = Vec<ConfigForDomain<HttpsRecordRule>>;
+pub type TxtRecords = Vec<ConfigForDomain<TxtRecord>>;
 
 #[derive(Default)]
 pub struct Config {
@@ -399,6 +400,11 @@ pub enum HttpsRecordRule {
     },
     RecordData(HTTPS),
 }
+
+/// Static TXT record: `txt-record /domain/text`.
+/// Multiple lines for one domain accumulate into a single TXT RRset.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Hash)]
+pub struct TxtRecord(pub String);
 
 macro_rules! impl_from_str {
     ($($type:ty),*) => {

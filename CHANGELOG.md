@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 
+### feat(conf): 支持 txt-record 静态 TXT 记录，对齐 C 原版行为
+
+对照 `pymumu/smartdns`（C 原版）做配置指令普查后补齐的第一个缺口：C 版有 `txt-record`，
+本移植版缺失。
+
+- 语法与 C 版一致：`txt-record /example.com/text`；不写 `/domain/` 前缀时落到根域，
+  整行作为文本（对应 C 的 `_get_domain`）。
+- 同一域名的多条 `txt-record` 累积为同一个 TXT RRset，而不是后者覆盖前者
+  （对应 C 的 `_conf_domain_rule_txt_record` 追加链表语义）。
+- TXT 查询由 `ZoneProvider` 在本地直接应答，TTL 与其它静态记录一致（`MAX_TTL`）。
+- 新增测试：`config::parser::txt::tests::test_parse`、
+  `dns_conf::tests::test_txt_record_accumulates_per_domain`。
+  `cargo test` 全绿（324 + 10 + 7），clippy 零告警，fmt 干净。
+- 指令普查结论与后续缺口清单见 `docs/port-gap-analysis.md`（C 版 114 个指令中仍有 36 个未覆盖，
+  已按影响与优先级排序）。
+
 ## [v0.13.4] - 2026-10-11
 
 ### feat(conf): 发行包与服务安装默认配置改为开箱即用

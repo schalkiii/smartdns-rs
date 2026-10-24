@@ -35,6 +35,7 @@ mod response_mode;
 mod speed_mode;
 mod srv;
 mod svcb;
+mod txt;
 
 use super::*;
 
@@ -102,6 +103,7 @@ pub enum ConfigItem {
     ClientRule(ClientRule),
     CNAME(ConfigForDomain<CNameRule>),
     SrvRecord(ConfigForDomain<SRV>),
+    TxtRecord(ConfigForDomain<TxtRecord>),
     GroupBegin(String),
     GroupEnd,
     HttpsRecord(ConfigForDomain<HttpsRecordRule>),
@@ -184,6 +186,7 @@ impl std::fmt::Display for ConfigItem {
             ConfigItem::ClientRule(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::CNAME(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::SrvRecord(_) => write!(f, "# unsupported config item: {:?}", self)?,
+            ConfigItem::TxtRecord(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::GroupBegin(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::GroupEnd => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::HttpsRecord(_) => write!(f, "# unsupported config item: {:?}", self)?,
@@ -421,6 +424,7 @@ fn parse_line<'a>(input: &'a str) -> IResult<&'a str, ConfigLine<'a>> {
         map(config("serve-expired-ttl"), ConfigItem::ServeExpiredTtl),
         map(config("serve-expired"), ConfigItem::ServeExpired),
         map(config("srv-record"), ConfigItem::SrvRecord),
+        map(config("txt-record"), ConfigItem::TxtRecord),
         map(config("resolv-hostname"), ConfigItem::ResolvHostname),
         map(config("tcp-idle-time"), ConfigItem::TcpIdleTime),
         map(config("nftset"), ConfigItem::NftSet),

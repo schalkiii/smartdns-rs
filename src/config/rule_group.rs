@@ -1,6 +1,8 @@
 use std::sync::LazyLock;
 
-use super::{AddressRules, CNameRules, DomainRules, ForwardRule, HttpsRecords, SrvRecords};
+use super::{
+    AddressRules, CNameRules, DomainRules, ForwardRule, HttpsRecords, SrvRecords, TxtRecords,
+};
 
 static EMPTY: LazyLock<RuleGroup> = LazyLock::new(RuleGroup::default);
 
@@ -37,6 +39,8 @@ pub struct RuleGroup {
     pub srv_records: SrvRecords,
 
     pub https_records: HttpsRecords,
+
+    pub txt_records: TxtRecords,
 }
 
 impl RuleGroup {
@@ -51,5 +55,6 @@ impl RuleGroup {
         self.cnames.extend(other.cnames);
         self.srv_records.extend(other.srv_records);
         self.https_records.extend(other.https_records);
+        self.txt_records.extend(other.txt_records);
     }
 }

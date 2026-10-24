@@ -7,7 +7,7 @@ use crate::{
     collections::DomainMap,
     config::{
         AddressRules, CNameRules, ConfigForDomain, ConfigForIP, Domain, DomainRule, DomainRules,
-        DomainSets, ForwardRules, HttpsRecords, NFTsetConfig, SrvRecords,
+        DomainSets, ForwardRules, HttpsRecords, NFTsetConfig, SrvRecords, TxtRecords,
     },
 };
 
@@ -32,6 +32,7 @@ impl DomainRuleMap {
         cnames: &CNameRules,
         srv_records: &SrvRecords,
         https_records: &HttpsRecords,
+        txt_records: &TxtRecords,
         nftsets: &Vec<ConfigForDomain<Vec<ConfigForIP<NFTsetConfig>>>>,
     ) -> Self {
         let expand_domain = |domain: &Domain| match &domain {
@@ -86,6 +87,18 @@ impl DomainRuleMap {
         for rule in https_records {
             for name in expand_domain(&rule.domain) {
                 name_rule_map.entry(name).or_default().https = Some(rule.config.clone())
+            }
+        }
+
+        // append txt: one domain may carry several TXT records
+        for rule in txt_records {
+            for name in expand_domain(&rule.domain) {
+                name_rule_map
+                    .entry(name)
+                    .or_default()
+                    .txt
+                    .get_or_insert_with(Vec::new)
+                    .push(rule.config.0.clone());
             }
         }
 
@@ -247,6 +260,7 @@ mod tests {
                     },
                 },
             ],
+            &Default::default(),
             &Default::default(),
             &Default::default(),
             &Default::default(),
