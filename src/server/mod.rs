@@ -49,6 +49,7 @@ pub fn serve(
     use std::time::Duration;
 
     let dns_handle = handle.with_new_opt(bind_addr_config.server_opts().clone());
+    let socket_buff_size = cfg.socket_buff_size();
 
     fn create_cert_resolver(
         ssl_config: &SslConfig,
@@ -73,7 +74,7 @@ pub fn serve(
     let token = match bind_addr_config {
         BindAddrConfig::Udp(bind_addr_config) => {
             let socket = bind_to(
-                setup_udp_socket,
+                |addr, dev| setup_udp_socket(addr, dev, socket_buff_size),
                 bind_addr_config.sock_addr(),
                 bind_addr_config.device(),
                 "UDP",
@@ -82,7 +83,7 @@ pub fn serve(
         }
         BindAddrConfig::Tcp(bind_addr_config) => {
             let listener = bind_to(
-                setup_tcp_socket,
+                |addr, dev| setup_tcp_socket(addr, dev, socket_buff_size),
                 bind_addr_config.sock_addr(),
                 bind_addr_config.device(),
                 "TCP",
@@ -102,7 +103,7 @@ pub fn serve(
             )?;
 
             let listener = bind_to(
-                setup_tcp_socket,
+                |addr, dev| setup_tcp_socket(addr, dev, socket_buff_size),
                 bind_addr_config.sock_addr(),
                 bind_addr_config.device(),
                 LISTENER_TYPE,
@@ -119,7 +120,7 @@ pub fn serve(
             const LISTENER_TYPE: &str = "DNS over HTTP";
 
             let listener = bind_to(
-                setup_tcp_socket,
+                |addr, dev| setup_tcp_socket(addr, dev, socket_buff_size),
                 bind_addr_config.sock_addr(),
                 bind_addr_config.device(),
                 LISTENER_TYPE,
@@ -142,7 +143,7 @@ pub fn serve(
             )?;
 
             let listener = bind_to(
-                setup_tcp_socket,
+                |addr, dev| setup_tcp_socket(addr, dev, socket_buff_size),
                 bind_addr_config.sock_addr(),
                 bind_addr_config.device(),
                 LISTENER_TYPE,
@@ -171,7 +172,7 @@ pub fn serve(
             )?;
 
             let listener = bind_to(
-                setup_udp_socket,
+                |addr, dev| setup_udp_socket(addr, dev, socket_buff_size),
                 bind_addr_config.sock_addr(),
                 bind_addr_config.device(),
                 LISTENER_TYPE,
@@ -193,7 +194,7 @@ pub fn serve(
             )?;
 
             let listener = bind_to(
-                setup_udp_socket,
+                |addr, dev| setup_udp_socket(addr, dev, socket_buff_size),
                 bind_addr_config.sock_addr(),
                 bind_addr_config.device(),
                 LISTENER_TYPE,

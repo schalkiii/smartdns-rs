@@ -123,6 +123,7 @@ pub enum ConfigItem {
     ForceNoCNAME(bool),
     LocalPtrEnable(bool),
     MaxQueryLimit(usize),
+    SocketBuffSize(usize),
     ForceQtypeSoa(RecordType),
     ForwardRule(ForwardRule),
     HostsFile(glob::Pattern),
@@ -139,6 +140,8 @@ pub enum ConfigItem {
     MaxReplyIpNum(u8),
     MdnsLookup(bool),
     NftSet(ConfigForDomain<Vec<ConfigForIP<NFTsetConfig>>>),
+    NftsetTimeoutEnable(bool),
+    NftsetDebug(bool),
     NumWorkers(usize),
     PrefetchDomain(bool),
     ProxyConfig(NamedProxyConfig),
@@ -217,6 +220,7 @@ impl std::fmt::Display for ConfigItem {
             ConfigItem::ForceNoCNAME(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::LocalPtrEnable(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::MaxQueryLimit(_) => write!(f, "# unsupported config item: {:?}", self)?,
+            ConfigItem::SocketBuffSize(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::ServeExpiredPrefetchTime(_) => {
                 write!(f, "# unsupported config item: {:?}", self)?
             }
@@ -238,6 +242,10 @@ impl std::fmt::Display for ConfigItem {
             ConfigItem::MaxReplyIpNum(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::MdnsLookup(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::NftSet(_) => write!(f, "# unsupported config item: {:?}", self)?,
+            ConfigItem::NftsetTimeoutEnable(_) => {
+                write!(f, "# unsupported config item: {:?}", self)?
+            }
+            ConfigItem::NftsetDebug(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::NumWorkers(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::PrefetchDomain(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::ProxyConfig(_) => write!(f, "# unsupported config item: {:?}", self)?,
@@ -404,6 +412,9 @@ fn parse_line<'a>(input: &'a str) -> IResult<&'a str, ConfigLine<'a>> {
         map(config("force-no-CNAME"), ConfigItem::ForceNoCNAME),
         map(config("local-ptr-enable"), ConfigItem::LocalPtrEnable),
         map(config("max-query-limit"), ConfigItem::MaxQueryLimit),
+        map(config("nftset-timeout"), ConfigItem::NftsetTimeoutEnable),
+        map(config("nftset-debug"), ConfigItem::NftsetDebug),
+        map(config("socket-buff-size"), ConfigItem::SocketBuffSize),
     ));
 
     let group3 = alt((

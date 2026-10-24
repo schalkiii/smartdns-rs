@@ -1,3 +1,5 @@
+use std::net::IpAddr;
+
 use crate::config::ConfigForIP;
 use crate::dns::*;
 use crate::ffi::nftset;
@@ -27,34 +29,42 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsNftsetMidd
                     .collect::<Vec<_>>();
 
                 if !ip_addrs.is_empty() {
-                    tokio::spawn(async move {
-                        let (ipv4_addrs, ipv6_addrs): (Vec<_>, Vec<_>) =
-                            ip_addrs.into_iter().partition(|ip| ip.is_ipv4());
-                        if !ipv4_addrs.is_empty() {
-                            for nftset in &nftsets {
-                                if let ConfigForIP::V4(cfg) = nftset {
-                                    for ip in ipv4_addrs.iter() {
-                                        let _ =
-                                            nftset::add(cfg.family, &cfg.table, &cfg.name, *ip, 0);
-                                    }
-                                }
-                            }
-                        }
+                    // 对应 C 版 context.c:672：开启 nftset-timeout 时元素超时取答案 TTL * 3
+                    let timeout = if ctx.cfg().nftset_timeout_enable() {
+                        lookup.max_ttl().unwrap_or(0) as u64 * 3
+                    } else {
+                        0
+                    };
+                    let debug = ctx.cfg().nftset_debug();
 
-                        if !ipv6_addrs.is_empty() {
-                            for nftset in &nftsets {
-                                if let ConfigForIP::V6(cfg) = nftset {
-                                    for ip in ipv6_addrs.iter() {
-                                        let _ =
-                                            nftset::add(cfg.family, &cfg.table, &cfg.name, *ip, 0);
-                                    }
-                                }
-                            }
-                        }
+                    tokio::spawn(async move {
+                        add_addrs(&nftsets, &ip_addrs, timeout, debug);
                     });
                 }
             }
         }
         res
+    }
+}
+
+fn add_addrs(
+    nftsets: &[ConfigForIP<NFTsetConfig>],
+    ip_addrs: &[IpAddr],
+    timeout: u64,
+    debug: bool,
+) {
+    for nftset in nftsets {
+        let (family, table, name) = match nftset {
+            ConfigForIP::V4(cfg) => (cfg.family.as_str(), cfg.table.as_str(), cfg.name.as_str()),
+            ConfigForIP::V6(cfg) => (cfg.family.as_str(), cfg.table.as_str(), cfg.name.as_str()),
+        };
+        let want_v4 = matches!(nftset, ConfigForIP::V4(_));
+
+        for ip in ip_addrs.iter().filter(|ip| ip.is_ipv4() == want_v4) {
+            if debug {
+                log::debug!("[nftset] add {ip} to {family}#{table}#{name} (timeout {timeout})");
+            }
+            let _ = nftset::add(family, table, name, *ip, timeout);
+        }
     }
 }

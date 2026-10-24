@@ -36,6 +36,7 @@ pub fn bind_to<T: LocalAddr>(
 pub fn setup_tcp_socket(
     bind_addr: SocketAddr,
     bind_device: Option<&str>,
+    buff_size: Option<usize>,
 ) -> io::Result<TcpListener> {
     let socket = Socket::new(
         Domain::for_address(bind_addr),
@@ -43,7 +44,7 @@ pub fn setup_tcp_socket(
         Some(Protocol::TCP),
     )?;
 
-    setup_socket(&socket, bind_device, bind_addr)?;
+    setup_socket(&socket, bind_device, bind_addr, buff_size)?;
 
     socket.listen(128)?;
 
@@ -54,14 +55,18 @@ pub fn setup_tcp_socket(
     Ok(tcp_listener)
 }
 
-pub fn setup_udp_socket(bind_addr: SocketAddr, bind_device: Option<&str>) -> io::Result<UdpSocket> {
+pub fn setup_udp_socket(
+    bind_addr: SocketAddr,
+    bind_device: Option<&str>,
+    buff_size: Option<usize>,
+) -> io::Result<UdpSocket> {
     let socket = Socket::new(
         Domain::for_address(bind_addr),
         Type::DGRAM,
         Some(Protocol::UDP),
     )?;
 
-    setup_socket(&socket, bind_device, bind_addr)?;
+    setup_socket(&socket, bind_device, bind_addr, buff_size)?;
 
     let udp_socket = std::net::UdpSocket::from(socket);
 
@@ -78,6 +83,7 @@ fn setup_socket<'a, T: Into<SockRef<'a>>>(
     socket: T,
     bind_device: Option<&str>,
     bind_addr: SocketAddr,
+    buff_size: Option<usize>,
 ) -> io::Result<()> {
     let sock_ref: SockRef<'a> = socket.into();
     sock_ref.set_nonblocking(true)?;
@@ -91,6 +97,11 @@ fn setup_socket<'a, T: Into<SockRef<'a>>>(
     if sock_typ == Type::STREAM {
         // enable TCP_FASTOPEN
         sock_ref.set_tcp_nodelay(true)?;
+    }
+
+    if let Some(size) = buff_size {
+        sock_ref.set_recv_buffer_size(size)?;
+        sock_ref.set_send_buffer_size(size)?;
     }
 
     sock_ref.set_reuse_address(true)?;

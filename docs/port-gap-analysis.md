@@ -15,7 +15,7 @@ xerj search --url http://127.0.0.1:9300 --prefix smartdns-c "<问题>"
 ## 1. 配置指令覆盖
 
 C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令；Rust 解析器
-（`src/config/parser/`）支持 127 个键。逐项比对后，**C 有而 Rust 无的共 37 个（已补齐 6 个，剩余 31 个）**：
+（`src/config/parser/`）支持 127 个键。逐项比对后，**C 有而 Rust 无的共 37 个（已补齐 8 个，剩余 29 个）**：
 
 | 分类 | 指令 | 影响 | 状态 |
 | :--- | :--- | :--- | :--- |
@@ -29,7 +29,7 @@ C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令�
 | 行为 | `local-domain` | 声明本地域，不向上游转发 | 待实现 |
 | PTR | `local-ptr-enable` | 用 hosts 回答本机地址的 PTR（Rust 已有 `LocalPtrZoneProvider`，缺开关） | **本次已实现** |
 | 防火墙 | `ipset` / `ipset-timeout` / `ipset-no-speed` | ipset 下发与超时 | 待实现（nft 已有部分能力） |
-| 防火墙 | `nftset-timeout` / `nftset-debug` / `nftset-no-speed` | nftset 超时/调试 | 待实现 |
+| 防火墙 | `nftset-timeout` / `nftset-debug` / `nftset-no-speed` | nftset 超时/调试 | `timeout`/`debug` **已实现**；`no-speed` 待实现 |
 | 日志 | `log-syslog` / `audit-syslog` / `audit-console` / `log-color` | 日志后端与着色 | 低优先级 |
 | 日志 | `audit-SOA` | SOA 应答也审计 | 低优先级 |
 | 证书 | `bind-cert-generate` / `-root-key-file` / `-san` / `-validity-days` | 自签证书自动生成 | 低优先级（可用外部证书） |
@@ -88,3 +88,12 @@ C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令�
 `srv-record` 同一域名多行原先后者覆盖前者；现改为累积成同一 SRV RRset
 （`DomainRule.srv: Option<Vec<SRV>>`），由 `ZoneProvider` 一次返回多条，
 与 C 版链表语义一致。测试：`dns_mw_zone::tests::test_srv_record_multiple`。
+
+## 8. 第四批实现：nftset 超时/调试、socket 缓冲
+
+- `nftset-timeout`：开启后 nftset 元素超时取答案 TTL * 3（C `context.c:672`），
+  `nftset::add` 的 timeout 参数不再恒为 0；`nftset-debug` 打开逐条添加日志。
+  顺带把 v4/v6 两段重复的下发循环收敛成 `add_addrs`。
+- `socket-buff-size`：监听 socket 在 bind 前设置 SO_RCVBUF/SO_SNDBUF，
+  `serve()` 把配置透传给 UDP/TCP/DoT/DoH/DoH3/DoQ 全部监听器。
+- 测试：`dns_conf::tests::test_parity_directives` 覆盖两个指令的解析。

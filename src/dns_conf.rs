@@ -283,6 +283,24 @@ impl RuntimeConfig {
         self.max_query_limit.unwrap_or(65535)
     }
 
+    /// whether nftset elements get a timeout of ttl * 3
+    #[inline]
+    pub fn nftset_timeout_enable(&self) -> bool {
+        self.nftset_timeout_enable.unwrap_or_default()
+    }
+
+    /// whether nftset operations log verbosely
+    #[inline]
+    pub fn nftset_debug(&self) -> bool {
+        self.nftset_debug.unwrap_or_default()
+    }
+
+    /// listener socket send/recv buffer size in bytes
+    #[inline]
+    pub fn socket_buff_size(&self) -> Option<usize> {
+        self.socket_buff_size
+    }
+
     /// whether resolv mdns
     #[inline]
     pub fn mdns_lookup(&self) -> bool {
@@ -1036,6 +1054,9 @@ impl RuntimeConfigBuilder {
                 ForceNoCNAME(v) => self.force_no_cname = Some(v),
                 LocalPtrEnable(v) => self.local_ptr_enable = Some(v),
                 MaxQueryLimit(v) => self.max_query_limit = Some(v),
+                NftsetTimeoutEnable(v) => self.nftset_timeout_enable = Some(v),
+                NftsetDebug(v) => self.nftset_debug = Some(v),
+                SocketBuffSize(v) => self.socket_buff_size = Some(v),
                 CacheSize(v) => self.cache.size = Some(v),
                 ForceQtypeSoa(v) => {
                     self.force_qtype_soa.insert(v);
@@ -2126,6 +2147,9 @@ mod tests {
             .with("force-no-CNAME yes")
             .with("local-ptr-enable no")
             .with("serve-expired-prefetch-time 90")
+            .with("nftset-timeout yes")
+            .with("nftset-debug yes")
+            .with("socket-buff-size 262144")
             .build()
             .unwrap();
 
@@ -2133,6 +2157,9 @@ mod tests {
         assert!(cfg.force_no_cname());
         assert!(!cfg.local_ptr_enable());
         assert_eq!(cfg.serve_expired_prefetch_time(), 90);
+        assert!(cfg.nftset_timeout_enable());
+        assert!(cfg.nftset_debug());
+        assert_eq!(cfg.socket_buff_size(), Some(262144));
 
         let default = RuntimeConfig::default();
         assert_eq!(default.max_query_limit(), 65535, "C 版默认上限");

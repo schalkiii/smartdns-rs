@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### feat(conf): 补齐 nftset 超时/调试与监听 socket 缓冲配置
+
+- `nftset-timeout`：开启后 nftset 元素带 `TTL * 3` 的超时（原来恒为 0，即永不过期），
+  对应 C 版 `context.c:672`。
+- `nftset-debug`：打开后逐条记录下发的 IP、set 名与超时。
+- `socket-buff-size`：监听 socket 在 bind 前设置收发缓冲区，UDP/TCP/DoT/DoH/DoH3/DoQ
+  全部监听器生效。
+- 顺带把 nftset 中间件里 v4/v6 重复的下发循环收敛成 `add_addrs`。
+测试：`test_parity_directives` 覆盖两个新指令；gating 用 `feature = "nft"`。
+
 ### feat(conf): srv-record 支持同域名多值累积
 
 `srv-record` 同一域名写多行时，原实现后者覆盖前者，只剩最后一条 SRV；C 版是把它们

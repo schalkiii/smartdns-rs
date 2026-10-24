@@ -97,6 +97,11 @@ pub struct Config {
     /// max-query-limit [num]
     pub max_query_limit: Option<usize>,
 
+    /// socket send/recv buffer size in bytes for listeners
+    ///
+    /// socket-buff-size [bytes]
+    pub socket_buff_size: Option<usize>,
+
     /// dns server run user
     ///
     /// ```
@@ -239,6 +244,16 @@ pub struct Config {
     pub proxy_servers: HashMap<String, ProxyConfig>,
 
     pub nftsets: Vec<ConfigForDomain<Vec<ConfigForIP<NFTsetConfig>>>>,
+
+    /// set a timeout (ttl * 3) on nftset elements instead of leaving them permanent
+    ///
+    /// nftset-timeout [yes|no]
+    pub nftset_timeout_enable: Option<bool>,
+
+    /// verbose logging for nftset operations
+    ///
+    /// nftset-debug [yes|no]
+    pub nftset_debug: Option<bool>,
 
     pub resolv_file: Option<PathBuf>,
     pub domain_set_providers: HashMap<String, Vec<DomainSetProvider>>,
