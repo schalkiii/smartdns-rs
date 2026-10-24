@@ -1,6 +1,6 @@
 # Rust 移植版 vs C 原版：功能缺口评审
 
-评审对象：`pymumu/smartdns`（C，`dfc9ef4`）vs 本仓库 `smartdns-rs`（v0.13.4）。
+评审对象：`pymumu/smartdns`（C，`dfc9ef4`）vs 本仓库 `smartdns-rs`（基线 v0.13.4 + 当前 Unreleased）。
 检索方式：XERJ 本地索引（`--prefix smartdns-c` / `--prefix sdrs`）+ 逐文件读源码。
 
 复现：
@@ -74,14 +74,16 @@ C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令�
 `dns_mw_cname::tests::test_strip_cname_records`（CNAME 裁剪）。
 `cargo test` 326 + 10 + 7 全绿，clippy 零告警，fmt 干净。
 
-## 6. 后续优先级（剩余 32 项）
+## 6. 剩余优先级（滚动更新，当前 29 项）
 
-1. `cache-mem-size`（需逐条缓存内存核算）
-2. `ipset` / `ipset-timeout` / `nftset-timeout` / `nftset-debug`（防火墙集成）
-3. `local-domain`（本地域不转发）
-4. `socket-buff-size`（高吞吐调优）
-5. `acl-enable` / `ip-rules`（访问控制，需要设计配置语法）
-6. 日志/证书类（`log-syslog`、`bind-cert-generate` 等，非核心解析路径）
+1. `local-domain`（本地域 + hosts 后缀展开）
+2. `cache-mem-size`（需逐条缓存内存核算）
+3. `ipset` / `ipset-timeout` / `ipset-no-speed`、`nftset-no-speed`（防火墙集成）
+4. `acl-enable` / `ip-rules`（访问控制，需要先定配置语法）
+5. `log-syslog` / `audit-syslog` / `audit-console` / `log-color` / `audit-SOA`
+6. `bind-cert-generate` 等 4 项自签证书配置（需引入 rcgen）
+7. `data-dir`、`odhcpd-lease-file`、`debug-save-fail-packet*`、`group-match`、`server-http3`
+8. 不移植：`plugin`、`ddns-domain`、`no-daemon` / `no-pidfile` / `restart-on-crash`
 
 ## 7. 第三批实现：SRV 多值
 
