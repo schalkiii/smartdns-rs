@@ -523,6 +523,14 @@ just build --release --target x86_64-pc-windows-msvc
 cd docker && docker build -t smartdns .
 ```
 
+### Linux-gated code
+
+`ffi::nftset` 与 `dns_mw_nftset` 只在 `target_os = "linux"` + feature `nft` 下编译，Windows 上的
+`cargo check` / `cargo test` **不会**检查它们。改动这部分时，推送前先把 `src/main.rs` 里
+`mod dns_mw_nftset;` 与 `src/ffi/mod.rs` 里 `mod nftset_sys;` / `pub mod nftset;` 的
+`#[cfg(all(feature = "nft", target_os = "linux"))]` 临时去掉，跑一次 `cargo check --bin smartdns`，
+确认通过后再恢复门控。否则只能等 Linux CI 报错（v0.13.4 的 nftset 改动就是这样漏掉的）。
+
 ---
 
 ## Release & Packaging

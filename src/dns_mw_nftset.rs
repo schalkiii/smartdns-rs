@@ -1,8 +1,9 @@
 use std::net::IpAddr;
 
-use crate::config::ConfigForIP;
+use crate::config::{ConfigForIP, NFTsetConfig};
 use crate::dns::*;
 use crate::ffi::nftset;
+use crate::log;
 use crate::middleware::*;
 
 pub struct DnsNftsetMiddleware;
@@ -55,8 +56,9 @@ fn add_addrs(
 ) {
     for nftset in nftsets {
         let (family, table, name) = match nftset {
-            ConfigForIP::V4(cfg) => (cfg.family.as_str(), cfg.table.as_str(), cfg.name.as_str()),
-            ConfigForIP::V6(cfg) => (cfg.family.as_str(), cfg.table.as_str(), cfg.name.as_str()),
+            ConfigForIP::V4(cfg) => (cfg.family, cfg.table.as_str(), cfg.name.as_str()),
+            ConfigForIP::V6(cfg) => (cfg.family, cfg.table.as_str(), cfg.name.as_str()),
+            ConfigForIP::None => continue,
         };
         let want_v4 = matches!(nftset, ConfigForIP::V4(_));
 
