@@ -18,11 +18,22 @@ impl RuleZoneProvider {
     ) -> Result<Option<DnsResponse>, DnsError> {
         match req.query().query_type() {
             RecordType::SRV => {
-                if let Some(srv) = ctx.domain_rule.get_ref(|r| r.srv.as_ref()) {
-                    return Ok(Some(DnsResponse::from_rdata(
-                        req.query().original().to_owned(),
-                        RData::SRV(srv.clone()),
-                    )));
+                if let Some(values) = ctx.domain_rule.get_ref(|r| r.srv.as_ref()) {
+                    let query = req.query().original().to_owned();
+                    let records = values
+                        .iter()
+                        .map(|srv| {
+                            let mut record = Record::from_rdata(
+                                query.name().to_owned(),
+                                crate::dns_client::MAX_TTL,
+                                RData::SRV(srv.clone()),
+                            );
+                            record.set_dns_class(query.query_class());
+                            record
+                        })
+                        .collect::<Vec<_>>();
+
+                    return Ok(Some(DnsResponse::new_with_max_ttl(query, records)));
                 }
             }
             RecordType::HTTPS => {

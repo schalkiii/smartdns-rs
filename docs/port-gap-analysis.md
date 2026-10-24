@@ -15,12 +15,12 @@ xerj search --url http://127.0.0.1:9300 --prefix smartdns-c "<问题>"
 ## 1. 配置指令覆盖
 
 C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令；Rust 解析器
-（`src/config/parser/`）支持 127 个键。逐项比对后，**C 有而 Rust 无的共 37 个（本次补齐 5 个，剩余 32 个）**：
+（`src/config/parser/`）支持 127 个键。逐项比对后，**C 有而 Rust 无的共 37 个（已补齐 6 个，剩余 31 个）**：
 
 | 分类 | 指令 | 影响 | 状态 |
 | :--- | :--- | :--- | :--- |
 | 静态记录 | `txt-record` | 自定义 TXT 记录 | **本次已实现** |
-| 静态记录 | `srv-record`（增强） | C 版支持多组、Rust 单值 | 待评估 |
+| 静态记录 | `srv-record`（增强） | C 版支持多组、Rust 单值 | **本次已实现（多值累积）** |
 | 缓存 | `cache-mem-size` | 缓存内存上限 | 待实现（需逐条内存核算） |
 | 缓存 | `serve-expired-prefetch-time` | 过期前预取窗口，`src/dns_server/cache.c:87` | **本次已实现** |
 | 并发/网络 | `max-query-limit` | 并发查询上限，超出拒绝，`src/dns_server/dns_server.c:483` | **本次已实现** |
@@ -82,3 +82,9 @@ C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令�
 4. `socket-buff-size`（高吞吐调优）
 5. `acl-enable` / `ip-rules`（访问控制，需要设计配置语法）
 6. 日志/证书类（`log-syslog`、`bind-cert-generate` 等，非核心解析路径）
+
+## 7. 第三批实现：SRV 多值
+
+`srv-record` 同一域名多行原先后者覆盖前者；现改为累积成同一 SRV RRset
+（`DomainRule.srv: Option<Vec<SRV>>`），由 `ZoneProvider` 一次返回多条，
+与 C 版链表语义一致。测试：`dns_mw_zone::tests::test_srv_record_multiple`。

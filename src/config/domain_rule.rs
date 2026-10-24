@@ -12,7 +12,7 @@ pub struct DomainRule {
 
     pub cname: Option<CNameRule>,
 
-    pub srv: Option<SRV>,
+    pub srv: Option<Vec<SRV>>,
 
     pub https: Option<HttpsRecordRule>,
 

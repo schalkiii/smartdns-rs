@@ -95,6 +95,30 @@ mod tests {
         assert_eq!(srv.weight(), 2);
     }
 
+    /// 同一域名的多条 srv-record 必须累积成同一个 SRV RRset（对齐 C 版）。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_srv_record_multiple() {
+        let cfg = RuntimeConfig::builder()
+            .with("srv-record /_ldap._tcp/ldap1.example.com,389,1,10")
+            .with("srv-record /_ldap._tcp/ldap2.example.com,389,2,20")
+            .build()
+            .unwrap();
+
+        let mock = DnsMockMiddleware::mock(DnsZoneMiddleware::new()).build(cfg);
+        let records = mock
+            .lookup_rdata("_ldap._tcp", RecordType::SRV)
+            .await
+            .unwrap();
+
+        assert_eq!(records.len(), 2);
+        let mut targets = records
+            .iter()
+            .map(|r| r.as_srv().unwrap().target().to_string())
+            .collect::<Vec<_>>();
+        targets.sort();
+        assert_eq!(targets, vec!["ldap1.example.com", "ldap2.example.com"]);
+    }
+
     #[test]
     fn test_arpa() {
         let local_net = IpSet::new(vec![

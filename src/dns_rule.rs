@@ -76,10 +76,15 @@ impl DomainRuleMap {
             }
         }
 
-        // set srv
+        // append srv: one domain may carry several SRV records
         for rule in srv_records {
             for name in expand_domain(&rule.domain) {
-                name_rule_map.entry(name).or_default().srv = Some(rule.config.clone())
+                name_rule_map
+                    .entry(name)
+                    .or_default()
+                    .srv
+                    .get_or_insert_with(Vec::new)
+                    .push(rule.config.clone());
             }
         }
 

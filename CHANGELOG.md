@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### feat(conf): srv-record 支持同域名多值累积
+
+`srv-record` 同一域名写多行时，原实现后者覆盖前者，只剩最后一条 SRV；C 版是把它们
+追加到同一规则、作为同一个 SRV RRset 返回。现改为 `DomainRule.srv: Option<Vec<SRV>>`
+并累积，`ZoneProvider` 一次返回全部记录，查询类名与 TTL 保持与单条时一致。
+
+测试：`dns_mw_zone::tests::test_srv_record_multiple`（断言两条记录的目标名都在）。
+`cargo test --bin smartdns srv` 通过。
+
 ### feat(conf): 补齐并发限制、CNAME 裁剪、本地 PTR 开关与过期预取窗口
 
 继续对照 C 原版补齐配置面，四项均已按原版语义接线并测试：
