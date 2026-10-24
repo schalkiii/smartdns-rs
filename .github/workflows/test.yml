@@ -37,9 +37,20 @@ jobs:
           rust_target: ${{ matrix.target }}
 
       - name: Test
-        run: just test --features=disable_icmp_ping
+        run: just test --features=disable_icmp_ping 2>&1 | tee test.log
         env:
           USE_CROSS: ${{ matrix.os == 'ubuntu-latest' }}
+
+      # 失败测试名写入 annotation：日志域名在部分网络下不可达，annotation 始终可读
+      - name: Surface failing tests
+        if: failure()
+        shell: bash
+        run: |
+          if [ -f test.log ]; then
+            grep -E '^(test .*FAILED|failures:|---- .* stdout ----|thread .*panicked|error\[E[0-9]+\])' test.log               | head -40 | while IFS= read -r line; do echo "::error title=test-failure::$line"; done
+            echo '--- failure context ---'
+            grep -n -A20 'stdout ----' test.log | head -60
+          fi
 
   cleanliness:
     name: cleanliness ${{ matrix.target }}
