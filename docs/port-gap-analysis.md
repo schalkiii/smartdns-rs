@@ -15,19 +15,19 @@ xerj search --url http://127.0.0.1:9300 --prefix smartdns-c "<问题>"
 ## 1. 配置指令覆盖
 
 C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令；Rust 解析器
-（`src/config/parser/`）支持 127 个键。逐项比对后，**C 有而 Rust 无的共 37 个**：
+（`src/config/parser/`）支持 127 个键。逐项比对后，**C 有而 Rust 无的共 37 个（本次补齐 5 个，剩余 32 个）**：
 
 | 分类 | 指令 | 影响 | 状态 |
 | :--- | :--- | :--- | :--- |
 | 静态记录 | `txt-record` | 自定义 TXT 记录 | **本次已实现** |
 | 静态记录 | `srv-record`（增强） | C 版支持多组、Rust 单值 | 待评估 |
 | 缓存 | `cache-mem-size` | 缓存内存上限 | 待实现（需逐条内存核算） |
-| 缓存 | `serve-expired-prefetch-time` | 过期前预取窗口，`src/dns_server/cache.c:87` | 待实现 |
-| 并发/网络 | `max-query-limit` | 并发查询上限，超出拒绝，`src/dns_server/dns_server.c:483` | 待实现 |
+| 缓存 | `serve-expired-prefetch-time` | 过期前预取窗口，`src/dns_server/cache.c:87` | **本次已实现** |
+| 并发/网络 | `max-query-limit` | 并发查询上限，超出拒绝，`src/dns_server/dns_server.c:483` | **本次已实现** |
 | 并发/网络 | `socket-buff-size` | socket 收发缓冲区 | 待实现 |
-| 行为 | `force-no-CNAME` | 应答中去掉 CNAME 只留地址，`src/dns_server/address.c:195`、`answer.c:64` | 待实现 |
+| 行为 | `force-no-CNAME` | 应答中去掉 CNAME 只留地址，`src/dns_server/address.c:195`、`answer.c:64` | **本次已实现** |
 | 行为 | `local-domain` | 声明本地域，不向上游转发 | 待实现 |
-| PTR | `local-ptr-enable` | 用 hosts 回答本机地址的 PTR（Rust 已有 `LocalPtrZoneProvider`，缺开关） | 待接线 |
+| PTR | `local-ptr-enable` | 用 hosts 回答本机地址的 PTR（Rust 已有 `LocalPtrZoneProvider`，缺开关） | **本次已实现** |
 | 防火墙 | `ipset` / `ipset-timeout` / `ipset-no-speed` | ipset 下发与超时 | 待实现（nft 已有部分能力） |
 | 防火墙 | `nftset-timeout` / `nftset-debug` / `nftset-no-speed` | nftset 超时/调试 | 待实现 |
 | 日志 | `log-syslog` / `audit-syslog` / `audit-console` / `log-color` | 日志后端与着色 | 低优先级 |
@@ -60,3 +60,25 @@ C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令�
 3. `serve-expired-prefetch-time`（缓存命中率）。
 4. `local-ptr-enable`（已有 provider，只差开关）。
 5. `cache-mem-size`（需要逐条缓存内存核算，改动面大）。
+
+## 5. 第二批实现（保护性 / 行为 / 缓存）
+
+| 指令 | C 语义 | Rust 落点 |
+| :--- | :--- | :--- |
+| `max-query-limit` | 并发请求数超过上限时直接回 REFUSED，告警 120s 节流（`dns_server.c:483`） | `app.rs` 调度循环入口 + `server::refused_response` |
+| `force-no-CNAME` | 应答不携带 CNAME，只留解析结果 | 新增最外层 `DnsForceNoCnameMiddleware`，`answers_mut().retain` 裁掉 CNAME（CNAME 查询本身不裁） |
+| `local-ptr-enable` | 默认开启；关闭后本机地址 PTR 不再本地应答（`ptr.c:269`） | `DnsZoneMiddleware::with_local_ptr` 决定是否注册 `LocalPtrZoneProvider` |
+| `serve-expired-prefetch-time` | 过期前预取窗口；未配置时按 `serve-expired-ttl/2` 且上限 8h 推导（`dns_cache.c:704`） | 命中即预取阈值改为读配置，未配置沿用现有 600s 默认 |
+
+测试：`dns_conf::tests::test_parity_directives`（解析 + 默认值）、
+`dns_mw_cname::tests::test_strip_cname_records`（CNAME 裁剪）。
+`cargo test` 326 + 10 + 7 全绿，clippy 零告警，fmt 干净。
+
+## 6. 后续优先级（剩余 32 项）
+
+1. `cache-mem-size`（需逐条缓存内存核算）
+2. `ipset` / `ipset-timeout` / `nftset-timeout` / `nftset-debug`（防火墙集成）
+3. `local-domain`（本地域不转发）
+4. `socket-buff-size`（高吞吐调优）
+5. `acl-enable` / `ip-rules`（访问控制，需要设计配置语法）
+6. 日志/证书类（`log-syslog`、`bind-cert-generate` 等，非核心解析路径）

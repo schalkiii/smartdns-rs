@@ -4,6 +4,25 @@
 
 ## [Unreleased]
 
+### feat(conf): 补齐并发限制、CNAME 裁剪、本地 PTR 开关与过期预取窗口
+
+继续对照 C 原版补齐配置面，四项均已按原版语义接线并测试：
+
+- `max-query-limit`（默认 65535，0 为不限）：并发请求数超过上限时直接回 `REFUSED`，
+  不进入处理链，告警按 120s 节流——对应 C 版 `dns_server.c:483`。落点 `app.rs` 调度循环
+  与 `server::refused_response`（复用原有的 REFUSED 应答构造）。
+- `force-no-CNAME`：新增最外层 `DnsForceNoCnameMiddleware`，应答中裁掉 CNAME 记录只保留
+  解析结果；`CNAME` 类型查询本身的答案不裁。
+- `local-ptr-enable`（默认开启）：关闭后不再注册 `LocalPtrZoneProvider`，本机地址的 PTR
+  查询回落到上游，对应 C 版 `ptr.c:269`。
+- `serve-expired-prefetch-time`：命中即预取的剩余 TTL 阈值改为读配置，未配置时沿用原有
+  600s 默认，避免改变默认行为。
+
+同时把 C 版配置指令普查的剩余项重排了优先级，详见 `docs/port-gap-analysis.md`
+（37 项已补 5 项，剩余 32 项）。
+测试：`test_parity_directives`、`test_strip_cname_records`；`cargo test` 326 + 10 + 7 全绿，
+clippy 零告警，fmt 干净。
+
 ### feat(conf): 支持 txt-record 静态 TXT 记录，对齐 C 原版行为
 
 对照 `pymumu/smartdns`（C 原版）做配置指令普查后补齐的第一个缺口：C 版有 `txt-record`，

@@ -9,10 +9,18 @@ pub struct DnsZoneMiddleware {
 
 impl DnsZoneMiddleware {
     pub fn new() -> Self {
+        Self::with_local_ptr(true)
+    }
+
+    /// `local-ptr-enable no` 时不再注册本地 PTR provider，PTR 查询继续走上游。
+    pub fn with_local_ptr(local_ptr_enable: bool) -> Self {
+        let mut manager = ZoneManager::new();
+        if local_ptr_enable {
+            manager = manager.with_provider(LocalPtrZoneProvider::new());
+        }
+
         Self {
-            manager: ZoneManager::new()
-                .with_provider(LocalPtrZoneProvider::new())
-                .with_provider(IdentityZoneProvider::new()),
+            manager: manager.with_provider(IdentityZoneProvider::new()),
             rule_provider: RuleZoneProvider::new(),
         }
     }

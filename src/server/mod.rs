@@ -252,6 +252,17 @@ pub type IncomingDnsMessage = (SerialMessage, ServerOpts, oneshot::Sender<Serial
 
 pub type IncomingDnsRequest = mpsc::UnboundedReceiver<IncomingDnsMessage>;
 
+/// 用 REFUSED 应答一个无法进入处理链的请求（并发超限、处理通道已关闭等）。
+pub fn refused_response(message: SerialMessage) -> SerialMessage {
+    let addr = message.addr();
+    let protocol = message.protocol();
+    let mut response_message = DnsRequest::try_from(message)
+        .map(|req| req.to_response())
+        .unwrap_or_else(|_| Message::query().to_response());
+    response_message.set_response_code(ResponseCode::Refused);
+    SerialMessage::raw(response_message, addr, protocol)
+}
+
 impl DnsHandle {
     pub fn new() -> (IncomingDnsRequest, Self) {
         let (tx, rx) = mpsc::unbounded_channel();
@@ -269,14 +280,7 @@ impl DnsHandle {
         let (tx, rx) = oneshot::channel();
 
         if let Err(err) = self.sender.send((message, self.opts.clone(), tx)) {
-            let message = err.0.0;
-            let addr = message.addr();
-            let protocol = message.protocol();
-            let mut response_message = DnsRequest::try_from(message)
-                .map(|req| req.to_response())
-                .unwrap_or_else(|_| Message::query().to_response());
-            response_message.set_response_code(ResponseCode::Refused);
-            return SerialMessage::raw(response_message, addr, protocol);
+            return refused_response(err.0.0);
         }
 
         match rx.await {

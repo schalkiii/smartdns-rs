@@ -271,6 +271,18 @@ impl RuntimeConfig {
         self.expand_ptr_from_address.unwrap_or_default()
     }
 
+    /// whether to answer PTR for local addresses from the hosts file
+    #[inline]
+    pub fn local_ptr_enable(&self) -> bool {
+        self.local_ptr_enable.unwrap_or(true)
+    }
+
+    /// maximum number of concurrent queries, 0 means unlimited
+    #[inline]
+    pub fn max_query_limit(&self) -> usize {
+        self.max_query_limit.unwrap_or(65535)
+    }
+
     /// whether resolv mdns
     #[inline]
     pub fn mdns_lookup(&self) -> bool {
@@ -355,6 +367,12 @@ impl RuntimeConfig {
         self.cache.serve_expired_reply_ttl.unwrap_or(5)
     }
 
+    /// how long before expiry an entry is refreshed in the background; 0 means derive from TTL
+    #[inline]
+    pub fn serve_expired_prefetch_time(&self) -> u64 {
+        self.cache.serve_expired_prefetch_time.unwrap_or(0)
+    }
+
     /// cache negative responses (NXDOMAIN / NODATA)
     #[inline]
     pub fn cache_negative(&self) -> bool {
@@ -396,6 +414,12 @@ impl RuntimeConfig {
     #[inline]
     pub fn force_aaaa_soa(&self) -> bool {
         self.force_aaaa_soa.unwrap_or_default()
+    }
+
+    /// whether to strip CNAME records from answers
+    #[inline]
+    pub fn force_no_cname(&self) -> bool {
+        self.force_no_cname.unwrap_or_default()
     }
 
     /// force HTTPS query return SOA
@@ -1008,6 +1032,10 @@ impl RuntimeConfigBuilder {
                 SpeedMode(v) => self.speed_check_mode = v,
                 ServeExpiredTtl(v) => self.cache.serve_expired_ttl = Some(v),
                 ServeExpiredReplyTtl(v) => self.cache.serve_expired_reply_ttl = Some(v),
+                ServeExpiredPrefetchTime(v) => self.cache.serve_expired_prefetch_time = Some(v),
+                ForceNoCNAME(v) => self.force_no_cname = Some(v),
+                LocalPtrEnable(v) => self.local_ptr_enable = Some(v),
+                MaxQueryLimit(v) => self.max_query_limit = Some(v),
                 CacheSize(v) => self.cache.size = Some(v),
                 ForceQtypeSoa(v) => {
                     self.force_qtype_soa.insert(v);
@@ -2088,5 +2116,28 @@ mod tests {
                 .get(|rule| rule.txt.clone()),
             Some(vec!["v=spf1 -all".to_string(), "second value".to_string()])
         );
+    }
+
+    /// 补齐的四个 C 版指令必须能解析并落到正确的配置字段，默认值与 C 版一致。
+    #[test]
+    fn test_parity_directives() {
+        let cfg = RuntimeConfig::builder()
+            .with("max-query-limit 1234")
+            .with("force-no-CNAME yes")
+            .with("local-ptr-enable no")
+            .with("serve-expired-prefetch-time 90")
+            .build()
+            .unwrap();
+
+        assert_eq!(cfg.max_query_limit(), 1234);
+        assert!(cfg.force_no_cname());
+        assert!(!cfg.local_ptr_enable());
+        assert_eq!(cfg.serve_expired_prefetch_time(), 90);
+
+        let default = RuntimeConfig::default();
+        assert_eq!(default.max_query_limit(), 65535, "C 版默认上限");
+        assert!(!default.force_no_cname());
+        assert!(default.local_ptr_enable(), "C 版默认开启本地 PTR");
+        assert_eq!(default.serve_expired_prefetch_time(), 0);
     }
 }

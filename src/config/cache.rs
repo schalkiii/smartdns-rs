@@ -55,6 +55,11 @@ pub struct CacheConfig {
     /// ```
     pub serve_expired_reply_ttl: Option<u64>,
 
+    /// how long before expiry an entry is refreshed in the background
+    ///
+    /// serve-expired-prefetch-time [num]
+    pub serve_expired_prefetch_time: Option<u64>,
+
     /// cache negative responses (NXDOMAIN / NODATA)
     ///
     /// cache-negative [yes|no]

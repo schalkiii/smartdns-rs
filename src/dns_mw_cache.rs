@@ -298,6 +298,13 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
 
         let query = req.query().original().to_owned();
 
+        // serve-expired-prefetch-time 控制命中即预取的剩余 TTL 窗口；
+        // 未配置时沿用现有默认，避免改变默认行为。
+        let on_hit_prefetch_remaining_ttl = match ctx.cfg().serve_expired_prefetch_time() {
+            0 => ON_HIT_PREFETCH_REMAINING_TTL,
+            configured => configured.min(u32::MAX as u64) as u32,
+        };
+
         let cached_res = if ctx.server_opts.is_background {
             // for background quering, we don't use cache
             None
@@ -320,7 +327,7 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
                             // 仅对剩余 TTL 偏低的条目做命中即预取，避免每个命中都打上游
                             // （堆驱动预取已覆盖到期刷新，详见 ON_HIT_PREFETCH_REMAINING_TTL）。
                             if !is_negative_response(&res, &query)
-                                && res.max_ttl().unwrap_or(0) < ON_HIT_PREFETCH_REMAINING_TTL
+                                && res.max_ttl().unwrap_or(0) < on_hit_prefetch_remaining_ttl
                             {
                                 self.try_prefetch(&query, ctx.server_group_name());
                             }
@@ -343,7 +350,7 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
                             // serve-stale 条目 TTL 已被改写为过期回复 TTL（远低于门槛），
                             // 此处一定通过门槛，照常触发后台刷新。
                             if !is_negative_response(&res, &query)
-                                && res.max_ttl().unwrap_or(0) < ON_HIT_PREFETCH_REMAINING_TTL
+                                && res.max_ttl().unwrap_or(0) < on_hit_prefetch_remaining_ttl
                             {
                                 self.try_prefetch(&query, ctx.server_group_name());
                             }

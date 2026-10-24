@@ -22,7 +22,7 @@ use crate::{
     dns_mw_audit::{QUERY_LOG_MAX, QueryLogEntry},
     dns_mw_cache::DnsCache,
     log,
-    server::{DnsHandle, IncomingDnsRequest, ServerHandle},
+    server::{DnsHandle, IncomingDnsRequest, ServerHandle, refused_response},
     third_ext::FutureJoinAllExt as _,
 };
 
@@ -391,12 +391,26 @@ pub fn serve(cfg: Arc<RuntimeConfig>) {
                     .fetch_add(background as u64, Ordering::Relaxed);
 
                 let handler = app.mw_handler.read().await.clone();
+                let max_query_limit = app.cfg.read().await.max_query_limit();
 
                 let mut batch = FuturesUnordered::new();
 
                 while let Some((message, server_opts, sender)) = requests.pop() {
                     let handler = handler.clone();
                     let app = app.clone();
+
+                    // 对应 C 版 dns_server.c:483：超过并发上限直接回 REFUSED，不进入处理链
+                    if max_query_limit > 0
+                        && !server_opts.is_background
+                        && app.active_queries.load(Ordering::Relaxed) > max_query_limit
+                    {
+                        warn_query_limit_reached(max_query_limit);
+                        let _ = sender.send(refused_response(message));
+                        // 该请求已计入 active_queries 但不会进入任何批次，手动归还
+                        app.active_queries.fetch_sub(1, Ordering::Relaxed);
+                        continue;
+                    }
+
                     if server_opts.is_background {
                         // 背景（预取）请求统一进入 bg_batch，由 background_concurrency(4) 限流。
                         // 早期实现曾在「空闲 30min」或队列满时丢弃背景请求，导致 sender
@@ -654,6 +668,28 @@ async fn process(
     }
 }
 
+/// 并发超限告警按 120s 节流，避免高负载时刷屏（对齐 C 版行为）。
+fn warn_query_limit_reached(max_query_limit: usize) {
+    use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static LAST_WARN_SECS: AtomicU64 = AtomicU64::new(0);
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default();
+    let last = LAST_WARN_SECS.load(AtomicOrdering::Relaxed);
+
+    if now.saturating_sub(last) >= 120
+        && LAST_WARN_SECS
+            .compare_exchange(last, now, AtomicOrdering::Relaxed, AtomicOrdering::Relaxed)
+            .is_ok()
+    {
+        log::warn!("maximum number of dns queries reached, max: {max_query_limit}");
+    }
+}
+
 fn build_middleware(
     cfg: &Arc<RuntimeConfig>,
     dns_handle: &DnsHandle,
@@ -665,7 +701,7 @@ fn build_middleware(
     use crate::dns_mw_audit::DnsAuditMiddleware;
     use crate::dns_mw_bogus::DnsBogusMiddleware;
     use crate::dns_mw_cache::DnsCacheMiddleware;
-    use crate::dns_mw_cname::DnsCNameMiddleware;
+    use crate::dns_mw_cname::{DnsCNameMiddleware, DnsForceNoCnameMiddleware};
     use crate::dns_mw_dns64::Dns64Middleware;
     use crate::dns_mw_dnsmasq::DnsmasqMiddleware;
     use crate::dns_mw_dualstack::DnsDualStackIpSelectionMiddleware;
@@ -675,6 +711,11 @@ fn build_middleware(
 
     let middleware_handler = {
         let mut builder = DnsMiddlewareBuilder::new();
+
+        // 最外层：force-no-CNAME 必须在整条链返回后再裁剪应答
+        if cfg.force_no_cname() {
+            builder = builder.with(DnsForceNoCnameMiddleware);
+        }
 
         // 审计中间件：始终注册以填充 WebUI 查询日志环形缓冲；仅在启用审计文件时写入磁盘。
         let audit_file = if cfg.audit_enable() {
@@ -715,7 +756,7 @@ fn build_middleware(
             ));
         }
 
-        builder = builder.with(DnsZoneMiddleware::new());
+        builder = builder.with(DnsZoneMiddleware::with_local_ptr(cfg.local_ptr_enable()));
 
         if cfg.resolv_hostanme() {
             builder = builder.with(DnsHostsMiddleware::new());

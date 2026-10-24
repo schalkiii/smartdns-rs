@@ -87,6 +87,16 @@ pub struct Config {
 
     pub expand_ptr_from_address: Option<bool>,
 
+    /// answer PTR for local addresses from the hosts file
+    ///
+    /// local-ptr-enable [yes|no]
+    pub local_ptr_enable: Option<bool>,
+
+    /// maximum number of concurrent queries, 0 means unlimited
+    ///
+    /// max-query-limit [num]
+    pub max_query_limit: Option<usize>,
+
     /// dns server run user
     ///
     /// ```
@@ -149,6 +159,11 @@ pub struct Config {
     ///
     /// force-HTTPS-SOA [yes|no]
     pub force_https_soa: Option<bool>,
+
+    /// do not include CNAME records in the answer, only the resolved addresses
+    ///
+    /// force-no-CNAME [yes|no]
+    pub force_no_cname: Option<bool>,
 
     /// force specific qtype return soa
     ///

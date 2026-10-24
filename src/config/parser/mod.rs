@@ -120,6 +120,9 @@ pub enum ConfigItem {
     ExpandPtrFromAddress(bool),
     ForceAAAASOA(bool),
     ForceHTTPSSOA(bool),
+    ForceNoCNAME(bool),
+    LocalPtrEnable(bool),
+    MaxQueryLimit(usize),
     ForceQtypeSoa(RecordType),
     ForwardRule(ForwardRule),
     HostsFile(glob::Pattern),
@@ -142,6 +145,7 @@ pub enum ConfigItem {
     ResolvHostname(bool),
     ResponseMode(ResponseMode),
     ServeExpired(bool),
+    ServeExpiredPrefetchTime(u64),
     ServeExpiredTtl(u64),
     ServeExpiredReplyTtl(u64),
     Server(NameServerInfo),
@@ -210,6 +214,12 @@ impl std::fmt::Display for ConfigItem {
             }
             ConfigItem::ForceAAAASOA(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::ForceHTTPSSOA(_) => write!(f, "# unsupported config item: {:?}", self)?,
+            ConfigItem::ForceNoCNAME(_) => write!(f, "# unsupported config item: {:?}", self)?,
+            ConfigItem::LocalPtrEnable(_) => write!(f, "# unsupported config item: {:?}", self)?,
+            ConfigItem::MaxQueryLimit(_) => write!(f, "# unsupported config item: {:?}", self)?,
+            ConfigItem::ServeExpiredPrefetchTime(_) => {
+                write!(f, "# unsupported config item: {:?}", self)?
+            }
             ConfigItem::ForceQtypeSoa(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::ForwardRule(rule) => {
                 write!(f, "nameserver {rule}")?;
@@ -390,6 +400,12 @@ fn parse_line<'a>(input: &'a str) -> IResult<&'a str, ConfigLine<'a>> {
         map(config("hosts-file"), ConfigItem::HostsFile),
     ));
 
+    let group2b = alt((
+        map(config("force-no-CNAME"), ConfigItem::ForceNoCNAME),
+        map(config("local-ptr-enable"), ConfigItem::LocalPtrEnable),
+        map(config("max-query-limit"), ConfigItem::MaxQueryLimit),
+    ));
+
     let group3 = alt((
         map(config("https-record"), ConfigItem::HttpsRecord),
         map(config("ignore-ip"), ConfigItem::IgnoreIp),
@@ -422,6 +438,10 @@ fn parse_line<'a>(input: &'a str) -> IResult<&'a str, ConfigLine<'a>> {
             ConfigItem::ServeExpiredReplyTtl,
         ),
         map(config("serve-expired-ttl"), ConfigItem::ServeExpiredTtl),
+        map(
+            config("serve-expired-prefetch-time"),
+            ConfigItem::ServeExpiredPrefetchTime,
+        ),
         map(config("serve-expired"), ConfigItem::ServeExpired),
         map(config("srv-record"), ConfigItem::SrvRecord),
         map(config("txt-record"), ConfigItem::TxtRecord),
@@ -439,7 +459,7 @@ fn parse_line<'a>(input: &'a str) -> IResult<&'a str, ConfigLine<'a>> {
         map(NomParser::parse, ConfigItem::Server),
     ));
 
-    let group = alt((group1, group2, group3, group4, group5));
+    let group = alt((group1, group2, group2b, group3, group4, group5));
 
     alt((
         map(
