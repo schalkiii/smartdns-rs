@@ -15,7 +15,7 @@ xerj search --url http://127.0.0.1:9300 --prefix smartdns-c "<问题>"
 ## 1. 配置指令覆盖
 
 C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令；Rust 解析器
-（`src/config/parser/`）支持 127 个键。逐项比对后，**C 有而 Rust 无的共 37 个（已补齐 18 个；group-end 为提取误报，实际已支持；剩余 18 个）**：
+（`src/config/parser/`）支持 127 个键。逐项比对后，**C 有而 Rust 无的共 37 个（已补齐 19 个；group-end 为提取误报，实际已支持；剩余 17 个）**：
 
 | 分类 | 指令 | 影响 | 状态 |
 | :--- | :--- | :--- | :--- |
@@ -38,7 +38,8 @@ C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令�
 | 运维 | `debug-save-fail-packet` / `-dir` | 失败请求报文落盘 | **本次已实现** |
 | ACL | `acl-enable` / `ip-rules` | 客户端/IP 访问控制 | 待评估 |
 | 其它 | `odhcpd-lease-file` | OpenWrt odhcpd 租约解析 | **本次已实现** |
-| 其它 | `ddns-domain` / `plugin` / `group-match` | DDNS、插件框架、组匹配 | 不移植 / 待评估 |
+| 其它 | `group-match` | 组匹配语法糖（域名 / 客户端 → 组） | **本次已实现** |
+| 其它 | `ddns-domain` / `plugin` | DDNS、插件框架 | 不移植 |
 
 ## 2. 本次实现：`txt-record`
 
@@ -76,13 +77,12 @@ C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令�
 `dns_mw_cname::tests::test_strip_cname_records`（CNAME 裁剪）。
 `cargo test` 326 + 10 + 7 全绿，clippy 零告警，fmt 干净。
 
-## 6. 剩余优先级（滚动更新，当前 18 项）
+## 6. 剩余优先级（滚动更新，当前 17 项）
 
 2. `ipset` / `ipset-timeout` / `ipset-no-speed`、`nftset-no-speed`（防火墙集成）
 3. `acl-enable` / `ip-rules`（访问控制，需要先定配置语法）
 4. `log-syslog` / `audit-syslog`（syslog 后端）
 5. `bind-cert-generate` 等 4 项自签证书配置（需引入 rcgen）
-6. `group-match`
 7. 不移植：`plugin`、`ddns-domain`、`no-daemon` / `no-pidfile` / `restart-on-crash`
 
 ## 7. 第三批实现：SRV 多值
@@ -142,3 +142,10 @@ C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令�
   `<dir>/client-<qname>-<unix>.pkt`；默认目录 `/tmp/smartdns`（对齐 C 版）。
 - 写盘走 `spawn_blocking`，不拖慢失败响应；序列化或写盘失败只记 warn。
 测试：`dns_mw_debug::tests::test_write_fail_packet`、`test_parity_directives`。
+
+## 14. 第十批实现：group-match
+
+C 版中 `group-match` 只是语法糖：`-d` 等价 `nameserver /domain/group`，`-c` 等价
+`client-rules <cidr> -group <group>`。Rust 侧解析后直接翻译为 `ForwardRule` 与 `ClientRule`，
+不引入新的运行时逻辑。支持 `-g/--group`、`-d/--domain`、`-c/--client-ip` 短长两种写法。
+测试：`config::parser::group_match::tests::test_parse`、`dns_conf::tests::test_group_match_sugar`。

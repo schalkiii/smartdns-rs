@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### feat(conf): 支持 group-match 组匹配语法糖
+
+`group-match -g <group> -d <domain> -c <cidr>` 翻译为既有的 `nameserver /domain/group`
+与 `client-rules <cidr> -group <group>`，不新增运行时路径。
+测试：`test_parse`、`test_group_match_sugar`；cargo test 335+10+7 全绿。
+
 ### feat(debug): 支持 debug-save-fail-packet / -dir
 
 - 查询失败时把请求报文写入 `<dir>/client-<qname>-<unix>.pkt`（默认目录 `/tmp/smartdns`）。

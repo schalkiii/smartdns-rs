@@ -23,6 +23,7 @@ mod ip_net;
 mod ip_set;
 mod iporset;
 // mod line;
+mod group_match;
 mod local_domain;
 mod log_level;
 mod nameserver;
@@ -129,6 +130,7 @@ pub enum ConfigItem {
     DataDir(PathBuf),
     LocalDomain(LocalDomain),
     OdhcpdLeaseFile(PathBuf),
+    GroupMatch(GroupMatch),
     DebugSaveFailPacket(bool),
     DebugSaveFailPacketDir(PathBuf),
     LogColor(bool),
@@ -235,6 +237,7 @@ impl std::fmt::Display for ConfigItem {
             ConfigItem::DataDir(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::LocalDomain(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::OdhcpdLeaseFile(_) => write!(f, "# unsupported config item: {:?}", self)?,
+            ConfigItem::GroupMatch(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::DebugSaveFailPacket(_) => {
                 write!(f, "# unsupported config item: {:?}", self)?
             }
@@ -445,6 +448,7 @@ fn parse_line<'a>(input: &'a str) -> IResult<&'a str, ConfigLine<'a>> {
         map(config("audit-console"), ConfigItem::AuditConsole),
         map(config("local-domain"), ConfigItem::LocalDomain),
         map(config("odhcpd-lease-file"), ConfigItem::OdhcpdLeaseFile),
+        map(config("group-match"), ConfigItem::GroupMatch),
         map(
             config("debug-save-fail-packet"),
             ConfigItem::DebugSaveFailPacket,

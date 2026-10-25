@@ -456,6 +456,14 @@ pub enum HttpsRecordRule {
     RecordData(HTTPS),
 }
 
+/// `group-match -g <group> -d <domain> -c <cidr>` grouping sugar.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GroupMatch {
+    pub group: String,
+    pub domains: Vec<Domain>,
+    pub clients: Vec<Client>,
+}
+
 /// `local-domain <domain>` wrapper so `-` can clear the setting.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct LocalDomain(pub Option<Name>);

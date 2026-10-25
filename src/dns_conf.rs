@@ -1115,6 +1115,20 @@ impl RuntimeConfigBuilder {
                 DataDir(v) => self.data_dir = Some(self.resolve_filepath(v)),
                 LocalDomain(v) => self.local_domain = v.0,
                 OdhcpdLeaseFile(v) => self.odhcpd_lease_file = Some(self.resolve_filepath(v)),
+                GroupMatch(v) => {
+                    for domain in v.domains {
+                        rule_group.forward_rules.push(crate::config::ForwardRule {
+                            domain,
+                            nameserver: v.group.clone(),
+                        });
+                    }
+                    for client in v.clients {
+                        self.client_rules.push(crate::config::ClientRule {
+                            client,
+                            group: v.group.clone(),
+                        });
+                    }
+                }
                 DebugSaveFailPacket(v) => self.debug_save_fail_packet = Some(v),
                 DebugSaveFailPacketDir(v) => {
                     self.debug_save_fail_packet_dir = Some(self.resolve_filepath(v))
@@ -2266,6 +2280,23 @@ mod tests {
             default.debug_save_fail_packet_dir(),
             PathBuf::from("/tmp/smartdns")
         );
+    }
+
+    /// group-match 应翻译成 forward rule（域名→组）与 client rule（客户端→组）。
+    #[test]
+    fn test_group_match_sugar() {
+        let cfg = RuntimeConfig::builder()
+            .with("group-match -g office -d example.com -c 192.168.1.0/24")
+            .build()
+            .unwrap();
+
+        assert_eq!(cfg.client_rules().len(), 1);
+        assert_eq!(cfg.client_rules()[0].group, "office");
+
+        let groups = cfg.rule_groups();
+        let default_group = groups.get("default").expect("default group");
+        assert_eq!(default_group.forward_rules.len(), 1);
+        assert_eq!(default_group.forward_rules[0].nameserver, "office");
     }
 
     /// data-dir 应改变相对 cache-file 的落点，绝对路径保持不变。
