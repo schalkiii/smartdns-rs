@@ -149,3 +149,20 @@ C 版中 `group-match` 只是语法糖：`-d` 等价 `nameserver /domain/group`�
 `client-rules <cidr> -group <group>`。Rust 侧解析后直接翻译为 `ForwardRule` 与 `ClientRule`，
 不引入新的运行时逻辑。支持 `-g/--group`、`-d/--domain`、`-c/--client-ip` 短长两种写法。
 测试：`config::parser::group_match::tests::test_parse`、`dns_conf::tests::test_group_match_sugar`。
+
+## 15. 剩余项实现计划（含阻塞点）
+
+| 指令 | 方案 | 阻塞点 |
+| :--- | :--- | :--- |
+| `nftset-no-speed` | 在测速路径记录每个 IP 的失败结果，失败者写入配置的 nft set | 现 `multi_mode_ping_fastest` 只返回最快 IP、不保留逐 IP 结果，需小改测速路径 |
+| `ipset` / `ipset-timeout` / `ipset-no-speed` | 新增 ipset 后端（netlink 或调用 `ipset` CLI），与 nftset 中间件对称 | 需要新的后端模块与 Linux 集成测试 |
+| `ip-rules` | 按客户端 CIDR 作用的上游过滤规则 | 现有 blacklist/ignore 是全局的，且过滤发生在无客户端上下文的上游解析层，需把客户端上下文传入 |
+| `acl-enable` | 客户端 ACL（拒绝/允许列表） | Rust 侧尚无 ACL 规则语法，需先设计配置格式 |
+| `log-syslog` / `audit-syslog` | 增加 syslog writer（unix cfg） | 需引入 `syslog` 依赖，并接入 tracing MakeWriter |
+| `bind-cert-generate` / `-root-key-file` / `-san` / `-validity-days` | 用 rcgen 生成自签/由根密钥签发的证书 | 需引入 `rcgen` 依赖；root-key 签发需额外实现 |
+
+不移植（`not-applicable`）：
+
+- `no-daemon` / `no-pidfile` / `restart-on-crash`：本实现从不 daemonize，进程管理与重启交给 systemd / Windows 服务。
+- `plugin`：C 版插件 ABI（`.so` 回调）不可移植到 Rust。
+- `ddns-domain`：独立 DDNS 功能，超出 DNS 解析器移植范围。
