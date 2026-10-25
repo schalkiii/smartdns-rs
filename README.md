@@ -115,6 +115,10 @@ This repository is a production-hardened fork of [mokeyish/smartdns-rs](https://
 
   Built-in web dashboard with a single-page tabbed interface for real-time monitoring and management. Supports system overview (with top domains/clients ranking), upstream server inspection (per-server IP/port/protocol/security/status/query counts/success rate/average time), query log browsing with filters, cache management with search/flush, and rule management with address/forward CRUD.
 
+- **Configuration parity with the C version**
+
+  Every C SmartDNS directive that maps onto this architecture is implemented and tested (audited in v0.13.5): `txt-record`, multi-value `srv-record`, `cache-mem-size`, `max-query-limit`, `socket-buff-size`, `force-no-CNAME`, `local-domain`, `local-ptr-enable`, `odhcpd-lease-file`, `data-dir`, `log-color`, `log-syslog`, `audit-SOA` / `audit-console` / `audit-syslog`, `ipset*`, `nftset-*`, `ip-rules`, `acl-enable`, `group-match`, `server-http3`, the `bind-cert-*` self-signed family, and `debug-save-fail-packet*`. The full audit, per-batch notes and recommended values live in [docs/port-gap-analysis.md](docs/port-gap-analysis.md).
+
 Note: The C version of smartdns is very functional, but because it only supports **Linux**, while **MacOS and Windows** can only be supported through Docker or WSL. Therefore, I want to develop a rust version of SmartDNS that supports compiling to Windows, MacOS, Linux and Android Termux environment to run, and is compatible with its configuration.
 
 ---

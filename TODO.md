@@ -156,7 +156,7 @@ The functions that have been completed are not guaranteed to be completely probl
 
   Upstream HTTPS DNS server
 
-- [ ] `server-quic`
+- [x] `server-quic`
 
    Upstream QUIC DNS server
 
@@ -181,7 +181,7 @@ The functions that have been completed are not guaranteed to be completely probl
 
   set cname to domain
 
-- [ ] `dns64`
+- [x] `dns64`
 
   dns64 translation
 
@@ -193,31 +193,31 @@ The functions that have been completed are not guaranteed to be completely probl
 
   To query domain with specific server group
 
-- [ ] `ipset`
+- [x] `ipset`
 
    Domain IPSet
 
-- [ ] `ipset-timeout`
+- [x] `ipset-timeout`
 
   ipset timeout enable
 
-- [ ] `ipset-no-speed`
+- [x] `ipset-no-speed`
 
   When speed check fails, set the ip address of the domain name to the ipset
 
-- [ ] `nftset`
+- [x] `nftset`
 
   Domain nftset
 
-- [ ] `nftset-timeout`
+- [x] `nftset-timeout`
 
   nftset timeout enable
 
-- [ ] `nftset-no-speed`
+- [x] `nftset-no-speed`
 
   When speed check fails, set the ip address of the domain name to the nftset
 
-- [ ] `nftset-debug`
+- [x] `nftset-debug`
 
   nftset debug enable
 
@@ -273,15 +273,15 @@ The functions that have been completed are not guaranteed to be completely probl
 
   TTL value to use when replying with expired data
 
-- [ ] `serve-expired-prefetch-time`
+- [x] `serve-expired-prefetch-time`
 
   Prefetch time when serve expired
 
-- [ ] `dualstack-ip-selection`
+- [x] `dualstack-ip-selection`
 
   Dualstack ip selection
 
-- [ ] `dualstack-ip-selection-threshold`
+- [x] `dualstack-ip-selection-threshold`
 
   Dualstack ip select thresholds
 
@@ -296,3 +296,21 @@ The functions that have been completed are not guaranteed to be completely probl
 - [x] `ca-path`
 
   certificates path
+
+### C 版指令对齐（v0.13.5 补齐）
+
+对照 `pymumu/smartdns` 做指令普查后补齐；逐项实现与测试见 `docs/port-gap-analysis.md`，
+写法与取值建议见同文件 §22。
+
+- [x] `txt-record`
+- [x] `max-query-limit` / `socket-buff-size`
+- [x] `cache-mem-size`
+- [x] `force-no-CNAME` / `local-ptr-enable` / `local-domain`
+- [x] `odhcpd-lease-file` / `data-dir`
+- [x] `log-color` / `log-syslog` / `audit-SOA` / `audit-console` / `audit-syslog`
+- [x] `ip-rules` / `acl-enable` / `group-match`
+- [x] `server-http3` / `bind-cert-generate` / `bind-cert-san` / `bind-cert-validity-days` / `bind-cert-root-key-file`
+- [x] `debug-save-fail-packet` / `debug-save-fail-packet-dir`
+- [ ] `bind-cert-key-pass`
+
+  仅解析、加载私钥时并不使用它解密；加密私钥请先解密成明文 PEM 再配 `bind-cert-key`。

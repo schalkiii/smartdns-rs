@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+### docs: 同步 C 版指令对齐结论与逐项启用建议
+
+- `docs/port-gap-analysis.md` 新增 §22：按主题给出全部补齐项的可粘贴写法、取值建议、平台/feature
+  限制与「是否建议进默认配置」；§1 表格里 `socket-buff-size`、`nftset-no-speed` 两行状态已过期，改为已实现。
+- 记录两处易踩的坑：`srv-record` 的值顺序是 `<target>,<port>,<priority>,<weight>`（不是 C 版顺序）；
+  `server-http3`/`server-h3` 只在未写 scheme 时补默认值，写 `https://...` 会静默退化成 DoH。
+- `TODO.md`：勾掉 12 项实际已实现的指令（`ipset*` / `nftset*` / `dns64` / `server-quic` /
+  `serve-expired-prefetch-time` / `dualstack-ip-selection*`），并补一节 v0.13.5 补齐清单。
+- `README.md`：新增「Configuration parity with the C version」特性条目并指向缺口评审文档。
+
+### ci: 暴露 crates.io 发布失败，不再静默
+
+- `version.yml` 的 `Publish to crates.io` 带 `continue-on-error: true`，失败时 job 仍是绿的。
+  补一个 `steps.publish.outcome == 'failure'` 的 warning 注解步骤，避免「以为发到 crates.io 了」。
+- 实测 v0.13.5 该步失败原因：`hickory-proto` / `hickory-resolver` / `rustls-pki-types` 只有 git 依赖
+  （fork 补丁，crates.io 无对应版本），`cargo publish` 在 manifest 校验阶段即报错；本 fork 也未配置
+  `CARGO_REGISTRY_TOKEN`。`AGENTS.md` 的 Release 段落据此改写，不再声称发布到 crates.io。
+
 ## [v0.13.5] - 2026-10-25
 
 ### feat(conf): 支持 acl-enable 客户端白名单
