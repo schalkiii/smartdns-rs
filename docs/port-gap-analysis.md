@@ -15,13 +15,13 @@ xerj search --url http://127.0.0.1:9300 --prefix smartdns-c "<问题>"
 ## 1. 配置指令覆盖
 
 C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令；Rust 解析器
-（`src/config/parser/`）支持 127 个键。逐项比对后，**C 有而 Rust 无的共 37 个（已补齐 15 个；group-end 为提取误报，实际已支持；剩余 21 个）**：
+（`src/config/parser/`）支持 127 个键。逐项比对后，**C 有而 Rust 无的共 37 个（已补齐 16 个；group-end 为提取误报，实际已支持；剩余 20 个）**：
 
 | 分类 | 指令 | 影响 | 状态 |
 | :--- | :--- | :--- | :--- |
 | 静态记录 | `txt-record` | 自定义 TXT 记录 | **本次已实现** |
 | 静态记录 | `srv-record`（增强） | C 版支持多组、Rust 单值 | **本次已实现（多值累积）** |
-| 缓存 | `cache-mem-size` | 缓存内存上限 | 待实现（需逐条内存核算） |
+| 缓存 | `cache-mem-size` | 缓存内存上限 | **本次已实现（估算占用 + 超限 LRU 淘汰）** |
 | 缓存 | `serve-expired-prefetch-time` | 过期前预取窗口，`src/dns_server/cache.c:87` | **本次已实现** |
 | 并发/网络 | `max-query-limit` | 并发查询上限，超出拒绝，`src/dns_server/dns_server.c:483` | **本次已实现** |
 | 并发/网络 | `socket-buff-size` | socket 收发缓冲区 | 待实现 |
@@ -76,9 +76,8 @@ C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令�
 `dns_mw_cname::tests::test_strip_cname_records`（CNAME 裁剪）。
 `cargo test` 326 + 10 + 7 全绿，clippy 零告警，fmt 干净。
 
-## 6. 剩余优先级（滚动更新，当前 21 项）
+## 6. 剩余优先级（滚动更新，当前 20 项）
 
-1. `cache-mem-size`（需逐条缓存内存核算）
 2. `ipset` / `ipset-timeout` / `ipset-no-speed`、`nftset-no-speed`（防火墙集成）
 3. `acl-enable` / `ip-rules`（访问控制，需要先定配置语法）
 4. `log-syslog` / `audit-syslog`（syslog 后端）
@@ -128,3 +127,11 @@ C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令�
 - 配合 `local-domain`，`<host>.<local-domain>` 与裸主机名都能解析（对齐 C 版
   `test-local-domain.cc` 的 odhcpd 用例）。
 测试：`test_parse_odhcpd_line`、`test_odhcpd_store_lookup`、`test_odhcpd_lease_with_local_domain`。
+
+## 12. 第八批实现：cache-mem-size
+
+- `DnsCache` 维护估算占用（结构体 + 名称长度 + 每条记录 128B 常量）；
+  `cache-mem-size` 超限后按分片轮转淘汰 LRU，直到回到预算内；0 表示不限制（C 版默认）。
+- 覆盖三个插入路径（正向、否定、持久化加载）与 `clear()` 的重置。
+- 对外新增 `DnsCache::used_bytes()` 便于观测。
+测试：`dns_mw_cache::tests::test_cache_mem_size_evicts_entries`。

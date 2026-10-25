@@ -12,6 +12,11 @@ pub struct CacheConfig {
     /// ```
     pub size: Option<usize>,
 
+    /// maximum memory used by the cache in bytes, 0 means unlimited
+    ///
+    /// cache-mem-size [bytes]
+    pub mem_size: Option<usize>,
+
     /// enable persist cache when restart
     pub persist: Option<bool>,
 

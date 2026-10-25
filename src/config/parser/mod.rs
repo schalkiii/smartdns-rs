@@ -98,6 +98,7 @@ pub enum ConfigItem {
     CacheFile(PathBuf),
     CachePersist(bool),
     CacheSize(usize),
+    CacheMemSize(usize),
     CacheCheckpointTime(u64),
     CaFile(PathBuf),
     CaPath(PathBuf),
@@ -192,6 +193,7 @@ impl std::fmt::Display for ConfigItem {
             ConfigItem::CacheFile(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::CachePersist(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::CacheSize(_) => write!(f, "# unsupported config item: {:?}", self)?,
+            ConfigItem::CacheMemSize(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::CacheCheckpointTime(_) => {
                 write!(f, "# unsupported config item: {:?}", self)?
             }
@@ -374,6 +376,7 @@ fn parse_line<'a>(input: &'a str) -> IResult<&'a str, ConfigLine<'a>> {
         map(config("cache-file"), ConfigItem::CacheFile),
         map(config("cache-persist"), ConfigItem::CachePersist),
         map(config("cache-size"), ConfigItem::CacheSize),
+        map(config("cache-mem-size"), ConfigItem::CacheMemSize),
         map(
             config("cache-checkpoint-time"),
             ConfigItem::CacheCheckpointTime,

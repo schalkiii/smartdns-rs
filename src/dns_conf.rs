@@ -335,6 +335,12 @@ impl RuntimeConfig {
         self.cache.size.unwrap_or(512)
     }
 
+    /// maximum cache memory in bytes, 0 means unlimited
+    #[inline]
+    pub fn cache_mem_size(&self) -> usize {
+        self.cache.mem_size.unwrap_or(0)
+    }
+
     /// enable persist cache when restart
     #[inline]
     pub fn cache_persist(&self) -> bool {
@@ -1099,6 +1105,7 @@ impl RuntimeConfigBuilder {
                 AuditSoa(v) => self.audit.soa = Some(v),
                 AuditConsole(v) => self.audit.console = Some(v),
                 CacheSize(v) => self.cache.size = Some(v),
+                CacheMemSize(v) => self.cache.mem_size = Some(v),
                 ForceQtypeSoa(v) => {
                     self.force_qtype_soa.insert(v);
                 }
@@ -2197,6 +2204,7 @@ mod tests {
             .with("audit-console yes")
             .with("local-domain lan")
             .with("odhcpd-lease-file /tmp/odhcpd.leases")
+            .with("cache-mem-size 1048576")
             .build()
             .unwrap();
 
@@ -2216,6 +2224,7 @@ mod tests {
             cfg.odhcpd_lease_file(),
             Some(Path::new("/tmp/odhcpd.leases"))
         );
+        assert_eq!(cfg.cache_mem_size(), 1_048_576);
 
         let default = RuntimeConfig::default();
         assert_eq!(default.max_query_limit(), 65535, "C 版默认上限");
@@ -2226,6 +2235,7 @@ mod tests {
         assert!(!default.audit_soa());
         assert!(!default.audit_console());
         assert_eq!(default.local_domain(), None);
+        assert_eq!(default.cache_mem_size(), 0, "C 版默认不限制");
     }
 
     /// data-dir 应改变相对 cache-file 的落点，绝对路径保持不变。

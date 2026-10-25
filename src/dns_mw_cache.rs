@@ -53,6 +53,7 @@ impl DnsCacheMiddleware {
             cfg.serve_expired(),
             cfg.serve_expired_ttl(),
             cfg.serve_expired_reply_ttl(),
+            cfg.cache_mem_size(),
         ));
 
         if cfg.cache_persist() {
@@ -616,6 +617,9 @@ pub struct DnsCache {
     expired_ttl: u64,
     expired_reply_ttl: u64,
     query_hits: std::sync::atomic::AtomicU64,
+    /// 估算的缓存总字节数（0 表示不限制）
+    max_bytes: usize,
+    total_bytes: std::sync::atomic::AtomicUsize,
 }
 
 impl DnsCache {
@@ -624,6 +628,7 @@ impl DnsCache {
         serve_expired: bool,
         expired_ttl: u64,
         expired_reply_ttl: u64,
+        max_bytes: usize,
     ) -> Self {
         // 选择分片数：当配置容量小于分片数时退化为单分片，
         // 避免每片容量被钳制到 1 后同片键互相驱逐（命中率下降 / 单测失败）。
@@ -650,6 +655,50 @@ impl DnsCache {
             expired_ttl,
             expired_reply_ttl,
             query_hits: std::sync::atomic::AtomicU64::new(0),
+            max_bytes,
+            total_bytes: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    /// 估算的缓存占用字节数。
+    pub fn used_bytes(&self) -> usize {
+        self.total_bytes.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn add_bytes(&self, delta: isize) {
+        if delta == 0 {
+            return;
+        }
+        if delta > 0 {
+            self.total_bytes
+                .fetch_add(delta as usize, std::sync::atomic::Ordering::Relaxed);
+        } else {
+            self.total_bytes
+                .fetch_sub(delta.unsigned_abs(), std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// cache-mem-size 超限时按分片轮转淘汰 LRU 条目。
+    async fn enforce_memory_budget(&self) {
+        if self.max_bytes == 0 {
+            return;
+        }
+
+        while self.used_bytes() > self.max_bytes {
+            let mut evicted = false;
+            for shard in &self.shards {
+                let mut guard = shard.lock().await;
+                if let Some((query, entry)) = guard.pop_lru() {
+                    self.add_bytes(-(entry_size(&query, &entry) as isize));
+                    evicted = true;
+                    if self.used_bytes() <= self.max_bytes {
+                        break;
+                    }
+                }
+            }
+            if !evicted {
+                break;
+            }
         }
     }
 
@@ -730,17 +779,23 @@ impl DnsCache {
                 let count = entries.len();
                 for entry in entries {
                     let query = entry.data.query().clone();
+                    let size = entry_size(&query, &entry);
                     let idx = shard_index_of(&query, self.shards.len());
-                    self.shards[idx]
+                    if let Some((evicted_query, evicted_entry)) = self.shards[idx]
                         .lock()
                         .await
-                        .put(query.clone(), entry.clone());
+                        .push(query.clone(), entry.clone())
+                    {
+                        self.add_bytes(-(entry_size(&evicted_query, &evicted_entry) as isize));
+                    }
+                    self.add_bytes(size as isize);
                     // 重建就绪堆（用条目的真实 valid_until）。
                     self.prefetch_heap
                         .lock()
                         .await
                         .push(Reverse(PrefetchKey(entry.valid_until, query)));
                 }
+                self.enforce_memory_budget().await;
                 info!(
                     "DNS cache {} records loaded, elapsed {:?}",
                     count,
@@ -757,6 +812,8 @@ impl DnsCache {
         }
         // 同步清空预取就绪堆，否则堆中残留旧 Query 会在下次 get_expired 时才被回收。
         self.prefetch_heap.lock().await.clear();
+        self.total_bytes
+            .store(0, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub async fn cached_records(&self) -> Vec<CachedQueryRecord> {
@@ -806,19 +863,24 @@ impl DnsCache {
             .with_name_server_group(name_server_group.to_string());
 
         let idx = shard_index_of(&query, self.shards.len());
+        let new_entry = DnsCacheEntry::new(lookup.clone(), valid_until);
+        let new_size = entry_size(&query, &new_entry);
         {
             let mut shard = self.shards[idx].lock().await;
             if let Some(entry) = shard.get_mut(&query) {
+                let old_size = entry_size(&query, entry);
                 entry.data = lookup.clone();
                 entry.valid_until = valid_until;
                 entry.stats.hit();
+                self.add_bytes(new_size as isize - old_size as isize);
             } else {
-                shard.put(
-                    query.clone(),
-                    DnsCacheEntry::new(lookup.clone(), valid_until),
-                );
+                if let Some((evicted_query, evicted_entry)) = shard.push(query.clone(), new_entry) {
+                    self.add_bytes(-(entry_size(&evicted_query, &evicted_entry) as isize));
+                }
+                self.add_bytes(new_size as isize);
             }
         }
+        self.enforce_memory_budget().await;
         // 压入 prefetch 就绪堆（最小堆按过期时间排序）。
         self.prefetch_heap
             .lock()
@@ -847,14 +909,24 @@ impl DnsCache {
         resp.set_max_ttl(ttl.as_secs() as u32);
 
         let idx = shard_index_of(&query, self.shards.len());
-        let mut shard = self.shards[idx].lock().await;
-        if let Some(entry) = shard.get_mut(&query) {
-            entry.data = resp.clone();
-            entry.valid_until = valid_until;
-            entry.stats.hit();
-        } else {
-            shard.put(query.clone(), DnsCacheEntry::new(resp.clone(), valid_until));
+        let new_entry = DnsCacheEntry::new(resp.clone(), valid_until);
+        let new_size = entry_size(&query, &new_entry);
+        {
+            let mut shard = self.shards[idx].lock().await;
+            if let Some(entry) = shard.get_mut(&query) {
+                let old_size = entry_size(&query, entry);
+                entry.data = resp.clone();
+                entry.valid_until = valid_until;
+                entry.stats.hit();
+                self.add_bytes(new_size as isize - old_size as isize);
+            } else {
+                if let Some((evicted_query, evicted_entry)) = shard.push(query.clone(), new_entry) {
+                    self.add_bytes(-(entry_size(&evicted_query, &evicted_entry) as isize));
+                }
+                self.add_bytes(new_size as isize);
+            }
         }
+        self.enforce_memory_budget().await;
     }
 
     /// inserts a record based on the name and type.
@@ -1102,6 +1174,17 @@ pub struct CachedQueryRecord {
     pub query_type: RecordType,
     pub query_class: DNSClass,
     pub records: Box<[Record]>,
+}
+
+/// 估算单条缓存记录的内存占用（结构体开销 + 名称长度 + 每条记录的保守常量）。
+fn entry_size(query: &Query, entry: &DnsCacheEntry) -> usize {
+    use std::mem::size_of;
+
+    let mut size = size_of::<Query>() + size_of::<DnsCacheEntry>() + query.name().to_utf8().len();
+    for record in entry.data.records() {
+        size += size_of::<Record>() + record.name().to_utf8().len() + 128;
+    }
+    size
 }
 
 #[derive(Clone)]
@@ -1390,6 +1473,44 @@ mod tests {
         assert_eq!(&lookups[1].data, &lookup2[1].data);
     }
 
+    #[tokio::test]
+    async fn test_cache_mem_size_evicts_entries() {
+        let cache = DnsCache::new(1000, true, 30, 5, 16 * 1024);
+        let now = Instant::now();
+
+        for i in 0..200 {
+            let name: Name = format!("host{i}.example.com.").parse().unwrap();
+            let query = Query::query(name.clone(), RecordType::A);
+            let record = Record::from_rdata(
+                name,
+                60,
+                RData::A(std::net::Ipv4Addr::new(192, 0, 2, 1).into()),
+            );
+            let lookup =
+                DnsResponse::new_with_deadline(query, vec![record], now + Duration::from_secs(300));
+
+            cache
+                .insert_records(
+                    lookup.query().clone(),
+                    lookup.record_iter().cloned(),
+                    now,
+                    "default",
+                )
+                .await;
+        }
+
+        assert!(
+            cache.used_bytes() <= 16 * 1024,
+            "used_bytes={} 超过预算",
+            cache.used_bytes()
+        );
+        let count = cache.entry_count().await;
+        assert!(
+            count > 0 && count < 200,
+            "应发生淘汰，实际 entry_count={count}"
+        );
+    }
+
     #[test]
     fn test_is_negative_response_cname_nodata() {
         let name: Name = "www.example.com.".parse().unwrap();
@@ -1452,7 +1573,7 @@ mod tests {
             3000,
         );
 
-        let cache = DnsCache::new(10, true, 30, 5);
+        let cache = DnsCache::new(10, true, 30, 5, 0);
 
         let now = Instant::now();
 
@@ -1547,7 +1668,7 @@ mod tests {
             ),
         ];
 
-        let cache = DnsCache::new(10, true, 30, 5);
+        let cache = DnsCache::new(10, true, 30, 5, 0);
 
         let now = Instant::now();
 

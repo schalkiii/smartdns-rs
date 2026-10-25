@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### feat(cache): 支持 cache-mem-size 缓存内存上限
+
+- `cache-mem-size [bytes]`：按估算占用（结构体 + 名称 + 每条记录保守常量）统计，
+  超过上限时按分片轮转淘汰 LRU 条目；0 表示不限制（对齐 C 版默认）。
+- 覆盖正向/否定/持久化加载三条插入路径，`clear()` 同步重置计数。
+- 新增 `DnsCache::used_bytes()` 便于观测。
+测试：`test_cache_mem_size_evicts_entries`；cargo test 332+10+7 全绿。
+
 ### feat(conf): 支持 odhcpd-lease-file，与 dnsmasq 租约合并
 
 - `odhcpd-lease-file`：读取 OpenWrt odhcpd DHCPv6 租约，与 dnsmasq 租约合并到同一份映射；
