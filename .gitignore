@@ -40,3 +40,5 @@ webui/.next
 
 .agent
 .workbuddy/
+# CodeBuddy 会话记忆属于本机 IDE 产物，不入库（本地文件保留）
+.codebuddy/
