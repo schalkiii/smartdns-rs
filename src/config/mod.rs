@@ -137,6 +137,16 @@ pub struct Config {
     /// data-dir [path]
     pub data_dir: Option<PathBuf>,
 
+    /// dump failed query packets for debugging
+    ///
+    /// debug-save-fail-packet [yes|no]
+    pub debug_save_fail_packet: Option<bool>,
+
+    /// directory for dumped packets, defaults to /tmp/smartdns
+    ///
+    /// debug-save-fail-packet-dir [path]
+    pub debug_save_fail_packet_dir: Option<PathBuf>,
+
     /// odhcpd DHCPv6 lease file (OpenWrt)
     ///
     /// odhcpd-lease-file [path]

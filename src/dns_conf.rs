@@ -623,6 +623,20 @@ impl RuntimeConfig {
         self.odhcpd_lease_file.as_deref()
     }
 
+    /// whether failed query packets are dumped to disk
+    #[inline]
+    pub fn debug_save_fail_packet(&self) -> bool {
+        self.debug_save_fail_packet.unwrap_or_default()
+    }
+
+    /// directory for dumped failed packets
+    #[inline]
+    pub fn debug_save_fail_packet_dir(&self) -> PathBuf {
+        self.debug_save_fail_packet_dir
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("/tmp/smartdns"))
+    }
+
     #[inline]
     pub fn audit_num(&self) -> usize {
         self.audit.num.unwrap_or(2)
@@ -1101,6 +1115,10 @@ impl RuntimeConfigBuilder {
                 DataDir(v) => self.data_dir = Some(self.resolve_filepath(v)),
                 LocalDomain(v) => self.local_domain = v.0,
                 OdhcpdLeaseFile(v) => self.odhcpd_lease_file = Some(self.resolve_filepath(v)),
+                DebugSaveFailPacket(v) => self.debug_save_fail_packet = Some(v),
+                DebugSaveFailPacketDir(v) => {
+                    self.debug_save_fail_packet_dir = Some(self.resolve_filepath(v))
+                }
                 LogColor(v) => self.log.color = Some(v),
                 AuditSoa(v) => self.audit.soa = Some(v),
                 AuditConsole(v) => self.audit.console = Some(v),
@@ -2205,6 +2223,8 @@ mod tests {
             .with("local-domain lan")
             .with("odhcpd-lease-file /tmp/odhcpd.leases")
             .with("cache-mem-size 1048576")
+            .with("debug-save-fail-packet yes")
+            .with("debug-save-fail-packet-dir /tmp/smartdns-debug")
             .build()
             .unwrap();
 
@@ -2225,6 +2245,11 @@ mod tests {
             Some(Path::new("/tmp/odhcpd.leases"))
         );
         assert_eq!(cfg.cache_mem_size(), 1_048_576);
+        assert!(cfg.debug_save_fail_packet());
+        assert_eq!(
+            cfg.debug_save_fail_packet_dir(),
+            PathBuf::from("/tmp/smartdns-debug")
+        );
 
         let default = RuntimeConfig::default();
         assert_eq!(default.max_query_limit(), 65535, "C 版默认上限");
@@ -2236,6 +2261,11 @@ mod tests {
         assert!(!default.audit_console());
         assert_eq!(default.local_domain(), None);
         assert_eq!(default.cache_mem_size(), 0, "C 版默认不限制");
+        assert!(!default.debug_save_fail_packet());
+        assert_eq!(
+            default.debug_save_fail_packet_dir(),
+            PathBuf::from("/tmp/smartdns")
+        );
     }
 
     /// data-dir 应改变相对 cache-file 的落点，绝对路径保持不变。

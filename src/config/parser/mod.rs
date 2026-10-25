@@ -129,6 +129,8 @@ pub enum ConfigItem {
     DataDir(PathBuf),
     LocalDomain(LocalDomain),
     OdhcpdLeaseFile(PathBuf),
+    DebugSaveFailPacket(bool),
+    DebugSaveFailPacketDir(PathBuf),
     LogColor(bool),
     AuditSoa(bool),
     AuditConsole(bool),
@@ -233,6 +235,12 @@ impl std::fmt::Display for ConfigItem {
             ConfigItem::DataDir(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::LocalDomain(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::OdhcpdLeaseFile(_) => write!(f, "# unsupported config item: {:?}", self)?,
+            ConfigItem::DebugSaveFailPacket(_) => {
+                write!(f, "# unsupported config item: {:?}", self)?
+            }
+            ConfigItem::DebugSaveFailPacketDir(_) => {
+                write!(f, "# unsupported config item: {:?}", self)?
+            }
             ConfigItem::LogColor(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::AuditSoa(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::AuditConsole(_) => write!(f, "# unsupported config item: {:?}", self)?,
@@ -437,6 +445,14 @@ fn parse_line<'a>(input: &'a str) -> IResult<&'a str, ConfigLine<'a>> {
         map(config("audit-console"), ConfigItem::AuditConsole),
         map(config("local-domain"), ConfigItem::LocalDomain),
         map(config("odhcpd-lease-file"), ConfigItem::OdhcpdLeaseFile),
+        map(
+            config("debug-save-fail-packet"),
+            ConfigItem::DebugSaveFailPacket,
+        ),
+        map(
+            config("debug-save-fail-packet-dir"),
+            ConfigItem::DebugSaveFailPacketDir,
+        ),
     ));
 
     let group3 = alt((

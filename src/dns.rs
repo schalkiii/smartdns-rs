@@ -292,6 +292,12 @@ mod request {
             self.protocol
         }
 
+        /// The full request message (for diagnostics such as packet dumps).
+        #[inline]
+        pub fn message(&self) -> &Message {
+            &self.message
+        }
+
         pub fn with_cname(&self, name: Name) -> Self {
             Self {
                 id: self.id,

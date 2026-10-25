@@ -703,6 +703,7 @@ fn build_middleware(
     use crate::dns_mw_bogus::DnsBogusMiddleware;
     use crate::dns_mw_cache::DnsCacheMiddleware;
     use crate::dns_mw_cname::{DnsCNameMiddleware, DnsForceNoCnameMiddleware};
+    use crate::dns_mw_debug::DnsFailPacketMiddleware;
     use crate::dns_mw_dns64::Dns64Middleware;
     use crate::dns_mw_dnsmasq::DnsmasqMiddleware;
     use crate::dns_mw_dualstack::DnsDualStackIpSelectionMiddleware;
@@ -716,6 +717,11 @@ fn build_middleware(
         // 最外层：force-no-CNAME 必须在整条链返回后再裁剪应答
         if cfg.force_no_cname() {
             builder = builder.with(DnsForceNoCnameMiddleware);
+        }
+
+        // 最外层：失败请求落盘，覆盖整条链路的失败
+        if cfg.debug_save_fail_packet() {
+            builder = builder.with(DnsFailPacketMiddleware);
         }
 
         // 审计中间件：始终注册以填充 WebUI 查询日志环形缓冲；仅在启用审计文件时写入磁盘。

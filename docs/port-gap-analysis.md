@@ -15,7 +15,7 @@ xerj search --url http://127.0.0.1:9300 --prefix smartdns-c "<问题>"
 ## 1. 配置指令覆盖
 
 C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令；Rust 解析器
-（`src/config/parser/`）支持 127 个键。逐项比对后，**C 有而 Rust 无的共 37 个（已补齐 16 个；group-end 为提取误报，实际已支持；剩余 20 个）**：
+（`src/config/parser/`）支持 127 个键。逐项比对后，**C 有而 Rust 无的共 37 个（已补齐 18 个；group-end 为提取误报，实际已支持；剩余 18 个）**：
 
 | 分类 | 指令 | 影响 | 状态 |
 | :--- | :--- | :--- | :--- |
@@ -35,7 +35,7 @@ C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令�
 | 证书 | `bind-cert-generate` / `-root-key-file` / `-san` / `-validity-days` | 自签证书自动生成 | 低优先级（可用外部证书） |
 | 运维 | `no-daemon` / `no-pidfile` / `restart-on-crash` | 守护进程行为 | 不移植（交给 systemd/Windows 服务） |
 | 运维 | `data-dir` | 数据目录（相对 cache-file 按此解析） | **本次已实现** |
-| 运维 | `debug-save-fail-packet*` | 失败报文落盘 | 低优先级 |
+| 运维 | `debug-save-fail-packet` / `-dir` | 失败请求报文落盘 | **本次已实现** |
 | ACL | `acl-enable` / `ip-rules` | 客户端/IP 访问控制 | 待评估 |
 | 其它 | `odhcpd-lease-file` | OpenWrt odhcpd 租约解析 | **本次已实现** |
 | 其它 | `ddns-domain` / `plugin` / `group-match` | DDNS、插件框架、组匹配 | 不移植 / 待评估 |
@@ -76,13 +76,13 @@ C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令�
 `dns_mw_cname::tests::test_strip_cname_records`（CNAME 裁剪）。
 `cargo test` 326 + 10 + 7 全绿，clippy 零告警，fmt 干净。
 
-## 6. 剩余优先级（滚动更新，当前 20 项）
+## 6. 剩余优先级（滚动更新，当前 18 项）
 
 2. `ipset` / `ipset-timeout` / `ipset-no-speed`、`nftset-no-speed`（防火墙集成）
 3. `acl-enable` / `ip-rules`（访问控制，需要先定配置语法）
 4. `log-syslog` / `audit-syslog`（syslog 后端）
 5. `bind-cert-generate` 等 4 项自签证书配置（需引入 rcgen）
-6. `debug-save-fail-packet*`、`group-match`
+6. `group-match`
 7. 不移植：`plugin`、`ddns-domain`、`no-daemon` / `no-pidfile` / `restart-on-crash`
 
 ## 7. 第三批实现：SRV 多值
@@ -135,3 +135,10 @@ C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令�
 - 覆盖三个插入路径（正向、否定、持久化加载）与 `clear()` 的重置。
 - 对外新增 `DnsCache::used_bytes()` 便于观测。
 测试：`dns_mw_cache::tests::test_cache_mem_size_evicts_entries`。
+
+## 13. 第九批实现：debug-save-fail-packet / -dir
+
+- 新增最外层 `DnsFailPacketMiddleware`：链路返回 Err 且开关打开时，把请求报文写成
+  `<dir>/client-<qname>-<unix>.pkt`；默认目录 `/tmp/smartdns`（对齐 C 版）。
+- 写盘走 `spawn_blocking`，不拖慢失败响应；序列化或写盘失败只记 warn。
+测试：`dns_mw_debug::tests::test_write_fail_packet`、`test_parity_directives`。

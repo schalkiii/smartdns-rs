@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### feat(debug): 支持 debug-save-fail-packet / -dir
+
+- 查询失败时把请求报文写入 `<dir>/client-<qname>-<unix>.pkt`（默认目录 `/tmp/smartdns`）。
+- 最外层中间件捕获全链路失败；写盘走阻塞线程，序列化/写盘失败只记 warn。
+测试：`test_write_fail_packet`、`test_parity_directives`；cargo test 333+10+7 全绿。
+
 ### feat(cache): 支持 cache-mem-size 缓存内存上限
 
 - `cache-mem-size [bytes]`：按估算占用（结构体 + 名称 + 每条记录保守常量）统计，
