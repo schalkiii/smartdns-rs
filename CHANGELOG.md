@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v0.13.5] - 2026-10-25
+
 ### feat(conf): 支持 acl-enable 客户端白名单
 
 - 开启后未匹配任何 `client-rules` 的客户端返回 REFUSED（后台预取豁免）。
