@@ -611,6 +611,12 @@ impl RuntimeConfig {
         self.local_domain.as_ref()
     }
 
+    /// odhcpd DHCPv6 lease file
+    #[inline]
+    pub fn odhcpd_lease_file(&self) -> Option<&Path> {
+        self.odhcpd_lease_file.as_deref()
+    }
+
     #[inline]
     pub fn audit_num(&self) -> usize {
         self.audit.num.unwrap_or(2)
@@ -1088,6 +1094,7 @@ impl RuntimeConfigBuilder {
                 SocketBuffSize(v) => self.socket_buff_size = Some(v),
                 DataDir(v) => self.data_dir = Some(self.resolve_filepath(v)),
                 LocalDomain(v) => self.local_domain = v.0,
+                OdhcpdLeaseFile(v) => self.odhcpd_lease_file = Some(self.resolve_filepath(v)),
                 LogColor(v) => self.log.color = Some(v),
                 AuditSoa(v) => self.audit.soa = Some(v),
                 AuditConsole(v) => self.audit.console = Some(v),
@@ -2189,6 +2196,7 @@ mod tests {
             .with("audit-SOA yes")
             .with("audit-console yes")
             .with("local-domain lan")
+            .with("odhcpd-lease-file /tmp/odhcpd.leases")
             .build()
             .unwrap();
 
@@ -2204,6 +2212,10 @@ mod tests {
         assert!(cfg.audit_soa());
         assert!(cfg.audit_console());
         assert_eq!(cfg.local_domain(), Some(&"lan".parse().unwrap()));
+        assert_eq!(
+            cfg.odhcpd_lease_file(),
+            Some(Path::new("/tmp/odhcpd.leases"))
+        );
 
         let default = RuntimeConfig::default();
         assert_eq!(default.max_query_limit(), 65535, "C 版默认上限");

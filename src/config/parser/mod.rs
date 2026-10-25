@@ -127,6 +127,7 @@ pub enum ConfigItem {
     SocketBuffSize(usize),
     DataDir(PathBuf),
     LocalDomain(LocalDomain),
+    OdhcpdLeaseFile(PathBuf),
     LogColor(bool),
     AuditSoa(bool),
     AuditConsole(bool),
@@ -229,6 +230,7 @@ impl std::fmt::Display for ConfigItem {
             ConfigItem::SocketBuffSize(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::DataDir(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::LocalDomain(_) => write!(f, "# unsupported config item: {:?}", self)?,
+            ConfigItem::OdhcpdLeaseFile(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::LogColor(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::AuditSoa(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::AuditConsole(_) => write!(f, "# unsupported config item: {:?}", self)?,
@@ -431,6 +433,7 @@ fn parse_line<'a>(input: &'a str) -> IResult<&'a str, ConfigLine<'a>> {
         map(config("audit-SOA"), ConfigItem::AuditSoa),
         map(config("audit-console"), ConfigItem::AuditConsole),
         map(config("local-domain"), ConfigItem::LocalDomain),
+        map(config("odhcpd-lease-file"), ConfigItem::OdhcpdLeaseFile),
     ));
 
     let group3 = alt((

@@ -137,6 +137,11 @@ pub struct Config {
     /// data-dir [path]
     pub data_dir: Option<PathBuf>,
 
+    /// odhcpd DHCPv6 lease file (OpenWrt)
+    ///
+    /// odhcpd-lease-file [path]
+    pub odhcpd_lease_file: Option<PathBuf>,
+
     /// local domain suffix resolved through the mDNS group and expanded on hosts entries
     ///
     /// local-domain [domain|-]

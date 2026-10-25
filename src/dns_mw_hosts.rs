@@ -141,7 +141,7 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsHostsMiddl
 }
 
 /// 若 `name` 属于 `suffix`，返回去掉后缀后的基名。
-fn local_domain_base(name: &Name, suffix: Option<&Name>) -> Option<Name> {
+pub(crate) fn local_domain_base(name: &Name, suffix: Option<&Name>) -> Option<Name> {
     let suffix = suffix?;
     if !suffix.zone_of(name) {
         return None;

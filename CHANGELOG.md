@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### feat(conf): 支持 odhcpd-lease-file，与 dnsmasq 租约合并
+
+- `odhcpd-lease-file`：读取 OpenWrt odhcpd DHCPv6 租约，与 dnsmasq 租约合并到同一份映射；
+  任一文件 mtime 变化即重载。解析规则对齐 C 版（`# <iface> <duid> <iaid> <host> ... <addr/prefix>`）。
+- 可由 odhcpd 单独提供租约（未配置 dnsmasq 租约时也可用）。
+- 与 `local-domain` 联动：`<host>.<local-domain>` 与裸主机名均可解析。
+测试：`test_parse_odhcpd_line`、`test_odhcpd_store_lookup`、`test_odhcpd_lease_with_local_domain`。
+
 ### feat(conf): 支持 local-domain，并稳定网络型测试
 
 - `local-domain <domain>`：该后缀下的查询走 mDNS 服务组（与 C 版注册 local/mdns 组一致）；

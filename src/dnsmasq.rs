@@ -16,7 +16,8 @@ use chrono::{DateTime, Local, NaiveDateTime};
 
 pub struct LanClientStore {
     zone: Option<Name>,
-    file: PathBuf,
+    file: Option<PathBuf>,
+    odhcpd_file: Option<PathBuf>,
     cache: RwLock<Option<LeaseCache>>,
 }
 
@@ -44,8 +45,39 @@ impl LanClientStore {
     pub fn new<P: AsRef<Path>>(file: P, zone: Option<Name>) -> Self {
         Self {
             zone,
-            file: file.as_ref().to_owned(),
+            file: Some(file.as_ref().to_owned()),
+            odhcpd_file: None,
             cache: Default::default(),
+        }
+    }
+
+    /// 只使用 odhcpd 租约文件。
+    pub fn from_odhcpd<P: AsRef<Path>>(file: P, zone: Option<Name>) -> Self {
+        Self {
+            zone,
+            file: None,
+            odhcpd_file: Some(file.as_ref().to_owned()),
+            cache: Default::default(),
+        }
+    }
+
+    /// 追加 odhcpd DHCPv6 租约文件（dnsmasq 租约已在构造时指定）。
+    pub fn with_odhcpd_file<P: AsRef<Path>>(mut self, file: P) -> Self {
+        self.odhcpd_file = Some(file.as_ref().to_owned());
+        self.cache = Default::default();
+        self
+    }
+
+    fn lease_mtime(&self) -> Option<SystemTime> {
+        let mtime = |path: &Option<PathBuf>| {
+            path.as_ref()
+                .and_then(|p| std::fs::metadata(p).ok())
+                .and_then(|meta| meta.modified().ok())
+        };
+
+        match (mtime(&self.file), mtime(&self.odhcpd_file)) {
+            (Some(primary), Some(odhcpd)) => Some(primary.max(odhcpd)),
+            (primary, odhcpd) => primary.or(odhcpd),
         }
     }
 
@@ -61,9 +93,7 @@ impl LanClientStore {
             }
         }
 
-        let modified_at = std::fs::metadata(self.file.as_path())
-            .ok()
-            .and_then(|meta| meta.modified().ok());
+        let modified_at = self.lease_mtime();
 
         {
             let mut cache = self.cache.write().unwrap_or_else(|err| err.into_inner());
@@ -79,7 +109,12 @@ impl LanClientStore {
             }
         }
 
-        let refreshed = read_lease_file(self.file.as_path(), self.zone.as_ref()).ok();
+        let refreshed = read_lease_files(
+            self.file.as_deref(),
+            self.odhcpd_file.as_deref(),
+            self.zone.as_ref(),
+        )
+        .ok();
 
         let mut cache = self.cache.write().unwrap_or_else(|err| err.into_inner());
         if let Some(lease_mappings) = refreshed {
@@ -235,42 +270,119 @@ impl FromStr for ClientInfo {
 }
 
 fn read_lease_file<P: AsRef<Path>>(path: P, zone: Option<&Name>) -> std::io::Result<LeaseMappings> {
-    let file = File::open(path.as_ref())?;
+    read_lease_files(Some(path.as_ref()), None, zone)
+}
 
-    let reader = BufReader::new(file);
-
+/// 读取 dnsmasq（可选）与 odhcpd（可选）租约，合并到同一份映射。
+fn read_lease_files(
+    primary: Option<&Path>,
+    odhcpd: Option<&Path>,
+    zone: Option<&Name>,
+) -> std::io::Result<LeaseMappings> {
     let mut name_map = HashMap::new();
     let mut ip_map = HashMap::new();
 
-    for line in reader.lines() {
-        let line = match line {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
+    let mut read_any = false;
+    if let Some(path) = primary {
+        read_any |= collect_lease_file(path, zone, false, &mut name_map, &mut ip_map).is_ok();
+    }
+    if let Some(path) = odhcpd {
+        read_any |= collect_lease_file(path, zone, true, &mut name_map, &mut ip_map).is_ok();
+    }
 
-        let line = line.trim_start();
-
-        // skip comments and empty line.
-        if matches!(line.chars().next(), Some('#') | None) {
-            continue;
-        }
-
-        if let Ok(mut client_info) = ClientInfo::from_str(line) {
-            if let Some(z) = zone
-                && let Ok(host) = client_info.host.clone().append_name(z)
-            {
-                client_info.host = host;
-            }
-            client_info.host.set_fqdn(true);
-            let client_info = Arc::new(client_info);
-            name_map.insert(client_info.host.clone().into(), client_info.clone());
-            ip_map.insert(client_info.ip, client_info);
-        }
+    if !read_any {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no readable lease file",
+        ));
     }
 
     Ok(LeaseMappings {
         name_to_client: name_map.into(),
         ip_to_client: ip_map,
+    })
+}
+
+fn collect_lease_file(
+    path: &Path,
+    zone: Option<&Name>,
+    odhcpd: bool,
+    name_map: &mut HashMap<crate::config::WildcardName, Arc<ClientInfo>>,
+    ip_map: &mut HashMap<IpAddr, Arc<ClientInfo>>,
+) -> std::io::Result<()> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+
+    for line in reader.lines() {
+        let Ok(line) = line else {
+            continue;
+        };
+
+        let parsed = if odhcpd {
+            parse_odhcpd_line(line.trim())
+        } else {
+            let line = line.trim_start();
+            // skip comments and empty line.
+            if matches!(line.chars().next(), Some('#') | None) {
+                continue;
+            }
+            ClientInfo::from_str(line).ok()
+        };
+
+        let Some(mut client_info) = parsed else {
+            continue;
+        };
+
+        if let Some(z) = zone
+            && let Ok(host) = client_info.host.clone().append_name(z)
+        {
+            client_info.host = host;
+        }
+        client_info.host.set_fqdn(true);
+        let client_info = Arc::new(client_info);
+        name_map.insert(client_info.host.clone().into(), client_info.clone());
+        ip_map.insert(client_info.ip, client_info);
+    }
+
+    Ok(())
+}
+
+/// odhcpd 租约行：`[#] <duid> <iaid> <hostname> <addr/prefix> <valid> ...`
+/// 与 C 版一致：取第 4 个字段（偏移后）为主机名，最后一个字段为地址（去掉 /prefix）。
+fn parse_odhcpd_line(line: &str) -> Option<ClientInfo> {
+    let tokens = line.split_whitespace().collect::<Vec<_>>();
+    if tokens.is_empty() {
+        return None;
+    }
+
+    let offset = if tokens[0] == "#" {
+        1
+    } else if tokens[0].starts_with('#') {
+        return None;
+    } else {
+        0
+    };
+
+    if tokens.len().saturating_sub(offset) < 8 {
+        return None;
+    }
+
+    let hostname = tokens[offset + 3];
+    if hostname == "*" {
+        return None;
+    }
+    let host = Name::from_str(hostname).ok()?;
+
+    let ip = tokens.last()?.split('/').next()?;
+    let ip = IpAddr::from_str(ip).ok()?;
+
+    Some(ClientInfo {
+        id: tokens[offset].to_string(),
+        ip,
+        host,
+        mac: String::new(),
+        // odhcpd 行没有可直接比较的绝对过期时间；DNS 表不按过期过滤
+        expires_at: chrono::NaiveDate::MAX.and_hms_opt(23, 59, 59)?,
     })
 }
 
@@ -494,5 +606,48 @@ mod tests {
         let ip_unknown = "10.0.0.1".parse::<IpAddr>().unwrap();
         let rdata = store.reverse_lookup(&ip_unknown);
         assert!(rdata.is_none(), "Unknown IP should return None");
+    }
+    #[test]
+    fn test_parse_odhcpd_line() {
+        let line = "# br-lan duid1 iaid1 myhost 1780021250 144 128 2001:db8::100/128";
+        let client = parse_odhcpd_line(line).expect("odhcpd line should parse");
+        assert_eq!(client.host.to_string(), "myhost");
+        assert_eq!(client.ip, "2001:db8::100".parse::<IpAddr>().unwrap());
+
+        // 注释行、字段不足、占位主机名都应被拒绝
+        assert!(parse_odhcpd_line("# a comment").is_none());
+        assert!(parse_odhcpd_line("# br-lan duid iaid host 1 2 3").is_none());
+        assert!(parse_odhcpd_line("# br-lan d i * 1 2 3 2001:db8::1/128").is_none());
+    }
+
+    #[test]
+    fn test_odhcpd_store_lookup() {
+        let path = std::env::temp_dir().join("smartdns-test-odhcpd.leases");
+        std::fs::write(
+            &path,
+            "# br-lan duid1 iaid1 myhost 1780021250 144 128 2001:db8::100/128
+",
+        )
+        .unwrap();
+
+        let store = LanClientStore::from_odhcpd(&path, None);
+        let rdata = store.lookup(&Name::from_str("myhost").unwrap(), RecordType::AAAA);
+        assert_eq!(
+            rdata,
+            Some(RData::AAAA(
+                "2001:db8::100"
+                    .parse::<std::net::Ipv6Addr>()
+                    .unwrap()
+                    .into()
+            ))
+        );
+
+        let ptr = store.reverse_lookup(&"2001:db8::100".parse().unwrap());
+        assert_eq!(
+            ptr,
+            Some(RData::PTR(PTR(Name::from_str("myhost.").unwrap())))
+        );
+
+        let _ = std::fs::remove_file(path);
     }
 }

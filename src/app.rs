@@ -756,15 +756,22 @@ fn build_middleware(
 
         builder = builder.with(AddressMiddleware);
 
-        if cfg
-            .dnsmasq_lease_file()
-            .map(|x| x.is_file())
-            .unwrap_or_default()
-        {
-            builder = builder.with(DnsmasqMiddleware::new(
-                cfg.dnsmasq_lease_file().unwrap(),
-                cfg.domain().cloned(),
-            ));
+        let dnsmasq_lease = cfg.dnsmasq_lease_file().filter(|path| path.is_file());
+        let odhcpd_lease = cfg.odhcpd_lease_file().filter(|path| path.is_file());
+        match (dnsmasq_lease, odhcpd_lease) {
+            (Some(dnsmasq), Some(odhcpd)) => {
+                builder = builder.with(
+                    DnsmasqMiddleware::new(dnsmasq, cfg.domain().cloned()).with_odhcpd_file(odhcpd),
+                );
+            }
+            (Some(dnsmasq), None) => {
+                builder = builder.with(DnsmasqMiddleware::new(dnsmasq, cfg.domain().cloned()));
+            }
+            (None, Some(odhcpd)) => {
+                builder =
+                    builder.with(DnsmasqMiddleware::new_odhcpd(odhcpd, cfg.domain().cloned()));
+            }
+            (None, None) => {}
         }
 
         builder = builder.with(DnsZoneMiddleware::with_local_ptr(cfg.local_ptr_enable()));

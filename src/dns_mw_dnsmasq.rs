@@ -2,7 +2,6 @@ use crate::dns::*;
 use crate::dnsmasq::LanClientStore;
 use crate::libdns::proto::rr::RecordType;
 use crate::middleware::*;
-use std::borrow::Borrow;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -15,6 +14,19 @@ impl DnsmasqMiddleware {
         Self {
             client_store: LanClientStore::new(lease_file, domain),
         }
+    }
+
+    /// 只用 odhcpd DHCPv6 租约文件。
+    pub fn new_odhcpd<P: AsRef<Path>>(lease_file: P, domain: Option<Name>) -> Self {
+        Self {
+            client_store: LanClientStore::from_odhcpd(lease_file, domain),
+        }
+    }
+
+    /// 在 dnsmasq 租约之外追加 odhcpd 租约。
+    pub fn with_odhcpd_file<P: AsRef<Path>>(mut self, lease_file: P) -> Self {
+        self.client_store = self.client_store.with_odhcpd_file(lease_file);
+        self
     }
 }
 
@@ -51,9 +63,17 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsmasqMiddle
         }
 
         // Existing lookup logic for A/AAAA, etc.
+        // local-domain 下允许用 <host>.<local-domain> 解析租约主机名
+        let mut lookup_name: Name = req.query().name().clone().into();
+        if let Some(base) =
+            crate::dns_mw_hosts::local_domain_base(&lookup_name, ctx.cfg().local_domain())
+        {
+            lookup_name = base;
+        }
+
         if let Some(rdata) = self
             .client_store
-            .lookup(req.query().name().borrow(), req.query().query_type())
+            .lookup(&lookup_name, req.query().query_type())
         {
             let local_ttl = ctx.cfg().local_ttl();
 
@@ -79,8 +99,40 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsmasqMiddle
 mod tests {
     use super::*;
 
+    use crate::dns_conf::RuntimeConfig;
     use std::net::IpAddr;
     use std::str::FromStr;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_odhcpd_lease_with_local_domain() {
+        let path = std::env::temp_dir().join("smartdns-test-odhcpd-local.leases");
+        std::fs::write(
+            &path,
+            "# br-lan duid1 iaid1 rock-5b 1780020967 efe 128 2001:db8::efe/128
+",
+        )
+        .unwrap();
+
+        let cfg = RuntimeConfig::builder()
+            .with("local-domain lan")
+            .build()
+            .unwrap();
+        let mock =
+            crate::dns_mw::DnsMockMiddleware::mock(DnsmasqMiddleware::new_odhcpd(&path, None))
+                .build(cfg);
+
+        // 裸主机名与 <host>.lan 都应能解析
+        for name in ["rock-5b", "rock-5b.lan"] {
+            let rdata = mock.lookup_rdata(name, RecordType::AAAA).await.unwrap();
+            assert_eq!(rdata.len(), 1, "{name}");
+            assert_eq!(
+                rdata[0].as_aaaa().unwrap().0,
+                "2001:db8::efe".parse::<std::net::Ipv6Addr>().unwrap()
+            );
+        }
+
+        let _ = std::fs::remove_file(path);
+    }
 
     #[test]
     fn test_dnsmasq_middleware_reverse_lookup() {
