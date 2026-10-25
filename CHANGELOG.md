@@ -16,6 +16,8 @@
 - `README_zh-CN.md` 补齐英文版已有的「与 C 版配置对齐」特性条目，恢复两份 README 的内容一致。
 - `docs/port-gap-analysis.md` §22.7：`socket-buff-size` 补上「只接受纯整数，写 `512K` 被静默忽略」，
   并去掉与 `cache-mem-size` 重复的 `Byte` 后缀说明。
+- `docs/port-gap-analysis.md` §22.1：说清 `cache-mem-size` 与 `cache-size` 是两条独立上限、谁先到谁生效，
+  内存充裕建议直接写 0；本机 2026-10-25 实测常驻 222 条时 32 MiB 上限未触顶，命中率下降与该上限无关。
 
 ### docs: 同步 C 版指令对齐结论与逐项启用建议
 
