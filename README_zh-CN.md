@@ -369,7 +369,7 @@ sudo ./target/release/smartdns run -c ./etc/smartdns/smartdns.conf
 
 **症状**：部分未缓存域名在几十微秒内就失败（如 `elapsed: 79.8µs`），日志为 `proto error: no connections available`，客户端收到 SERVFAIL，而其他域名正常解析。服务刚重启后更明显，因为缓存是冷的。
 
-**可以排除的原因**：不是上游组为空——那种路径会在 ERROR 级别打印 `no available nameserver found for <域名>`，出现本症状时日志里并没有它；也不是版本回归——同一台机器、同一份配置下 v0.13.2 同样复现（16 个未缓存真实域名实测：v0.13.5 成功 13 个，v0.13.2 成功 10 个）。
+**可以排除的原因**：不是上游组为空——那种路径会在 ERROR 级别打印 `no available nameserver found for <域名>`，出现本症状时日志里并没有它；也不是版本回归——同一台机器上并排跑 v0.13.2 与 v0.13.5，把同一个随机域名各打一次，两边都返回 `rcode=2`；16 个未缓存真实域名下 v0.13.5 成功 13 个、v0.13.2 成功 10 个。
 
 **当前状态**：根因尚未定位。这个错误由本项目代码抛出而非 hickory：`ProtoErrorKind::NoConnections` 出现在 `src/dns_client.rs`（上游组为空的短路返回、以及并发 fan-out 的兜底分支）和 `src/dns_mw_ns.rs`（IP 策略回退时既无成功也无失败结果），而亚毫秒级耗时说明并没有完成任何一次上游往返。
 

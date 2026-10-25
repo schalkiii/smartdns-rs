@@ -369,7 +369,7 @@ Use `log-level debug` to see detailed retry and error information.
 
 **Symptom**: some uncached names fail after tens of microseconds (e.g. `elapsed: 79.8µs`) with `proto error: no connections available`, so the client gets SERVFAIL while other names resolve normally. The window right after a restart is worse because the cache is cold.
 
-**What it is not**: it is not an empty server group — that path logs `no available nameserver found for <name>` at ERROR level, which is absent when this happens. It also reproduces on v0.13.2 with the same config on the same network, so it is not a version regression (measured on 16 real uncached domains: v0.13.5 13/16 succeeded, v0.13.2 10/16).
+**What it is not**: it is not an empty server group — that path logs `no available nameserver found for <name>` at ERROR level, which is absent when this happens. It is also not a version regression: the same random name failed with `rcode=2` on both v0.13.2 and v0.13.5 running side by side on this machine, and over 16 uncached real domains v0.13.5 resolved 13 while v0.13.2 resolved 10.
 
 **Status**: root cause not isolated yet. The error is raised by this crate, not by hickory — `ProtoErrorKind::NoConnections` appears in `src/dns_client.rs` (empty group short-circuit and the fan-out fall-through) and in `src/dns_mw_ns.rs` (IP-strategy fallback with no result at all), and the sub-millisecond timing rules out any completed upstream round-trip.
 
