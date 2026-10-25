@@ -137,6 +137,11 @@ pub struct Config {
     /// data-dir [path]
     pub data_dir: Option<PathBuf>,
 
+    /// local domain suffix resolved through the mDNS group and expanded on hosts entries
+    ///
+    /// local-domain [domain|-]
+    pub local_domain: Option<Name>,
+
     /// List of hosts that supply bogus NX domain results
     pub bogus_nxdomain: Vec<IpOrSet>,
 
@@ -435,6 +440,10 @@ pub enum HttpsRecordRule {
     },
     RecordData(HTTPS),
 }
+
+/// `local-domain <domain>` wrapper so `-` can clear the setting.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct LocalDomain(pub Option<Name>);
 
 /// Static TXT record: `txt-record /domain/text`.
 /// Multiple lines for one domain accumulate into a single TXT RRset.

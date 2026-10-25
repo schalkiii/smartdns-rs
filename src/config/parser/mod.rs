@@ -23,6 +23,7 @@ mod ip_net;
 mod ip_set;
 mod iporset;
 // mod line;
+mod local_domain;
 mod log_level;
 mod nameserver;
 mod nftset;
@@ -125,6 +126,7 @@ pub enum ConfigItem {
     MaxQueryLimit(usize),
     SocketBuffSize(usize),
     DataDir(PathBuf),
+    LocalDomain(LocalDomain),
     LogColor(bool),
     AuditSoa(bool),
     AuditConsole(bool),
@@ -226,6 +228,7 @@ impl std::fmt::Display for ConfigItem {
             ConfigItem::MaxQueryLimit(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::SocketBuffSize(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::DataDir(_) => write!(f, "# unsupported config item: {:?}", self)?,
+            ConfigItem::LocalDomain(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::LogColor(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::AuditSoa(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::AuditConsole(_) => write!(f, "# unsupported config item: {:?}", self)?,
@@ -427,6 +430,7 @@ fn parse_line<'a>(input: &'a str) -> IResult<&'a str, ConfigLine<'a>> {
         map(config("log-color"), ConfigItem::LogColor),
         map(config("audit-SOA"), ConfigItem::AuditSoa),
         map(config("audit-console"), ConfigItem::AuditConsole),
+        map(config("local-domain"), ConfigItem::LocalDomain),
     ));
 
     let group3 = alt((

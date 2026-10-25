@@ -1204,6 +1204,7 @@ mod tests {
     use std::str::FromStr;
 
     #[tokio::test]
+    #[ignore = "requires Internet access; run with --ignored"]
     async fn test_with_default() {
         let client = DnsClient::builder().build().await;
         let lookup_ip = client

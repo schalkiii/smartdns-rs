@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### feat(conf): 支持 local-domain，并稳定网络型测试
+
+- `local-domain <domain>`：该后缀下的查询走 mDNS 服务组（与 C 版注册 local/mdns 组一致）；
+  hosts 查询自动剥离后缀命中基数名并改写记录名，等价于 C 版给 hosts 条目展开后缀；
+  `local-domain -` 清除设置。
+- `dns_client::tests::test_with_default`、`dns_mw_ns::tests::test_edns_client_subnet` 依赖真实外网，
+  在并行负载下偶发超时（CI 偶发红的原因之一），标记 `#[ignore]`，需要时 `cargo test -- --ignored`。
+测试：`config::parser::local_domain::tests::test_parse`、`dns_mw_hosts::tests::test_local_domain_base`、
+`test_parity_directives`；cargo test 328+10+7 全绿（11 ignored），clippy 零告警，fmt 干净。
+
 ### feat(conf): 补齐 server-http3、data-dir、log-color 与审计开关
 
 - `server-http3`：`server-h3` 的等价别名（h3://）。

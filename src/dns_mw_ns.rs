@@ -87,7 +87,14 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for NameServerMid
         let group_name = ctx.server_group_name().to_string();
 
         let name_server = {
-            let name_server = if ctx.cfg().mdns_lookup() && LOCAL.zone_of(name) {
+            let in_local_domain = ctx
+                .cfg()
+                .local_domain()
+                .map(|suffix| suffix.zone_of(name))
+                .unwrap_or_default();
+
+            let name_server = if (ctx.cfg().mdns_lookup() && LOCAL.zone_of(name)) || in_local_domain
+            {
                 client.get_server_group("mdns").await
             } else {
                 None
@@ -672,6 +679,7 @@ mod tests {
     use crate::{dns_conf::RuntimeConfig, third_ext::FutureJoinAllExt};
 
     #[test]
+    #[ignore = "requires Internet access; run with --ignored"]
     fn test_edns_client_subnet() {
         async fn inner_test(i: usize) -> bool {
             // https://lite.ip2location.com/ip-address-ranges-by-country

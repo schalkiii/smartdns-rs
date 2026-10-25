@@ -605,6 +605,12 @@ impl RuntimeConfig {
         self.data_dir.as_deref()
     }
 
+    /// local domain suffix, resolved through the mDNS server group
+    #[inline]
+    pub fn local_domain(&self) -> Option<&Name> {
+        self.local_domain.as_ref()
+    }
+
     #[inline]
     pub fn audit_num(&self) -> usize {
         self.audit.num.unwrap_or(2)
@@ -1081,6 +1087,7 @@ impl RuntimeConfigBuilder {
                 NftsetDebug(v) => self.nftset_debug = Some(v),
                 SocketBuffSize(v) => self.socket_buff_size = Some(v),
                 DataDir(v) => self.data_dir = Some(self.resolve_filepath(v)),
+                LocalDomain(v) => self.local_domain = v.0,
                 LogColor(v) => self.log.color = Some(v),
                 AuditSoa(v) => self.audit.soa = Some(v),
                 AuditConsole(v) => self.audit.console = Some(v),
@@ -2181,6 +2188,7 @@ mod tests {
             .with("log-color no")
             .with("audit-SOA yes")
             .with("audit-console yes")
+            .with("local-domain lan")
             .build()
             .unwrap();
 
@@ -2195,6 +2203,7 @@ mod tests {
         assert!(!cfg.log_config().color());
         assert!(cfg.audit_soa());
         assert!(cfg.audit_console());
+        assert_eq!(cfg.local_domain(), Some(&"lan".parse().unwrap()));
 
         let default = RuntimeConfig::default();
         assert_eq!(default.max_query_limit(), 65535, "C 版默认上限");
@@ -2204,6 +2213,7 @@ mod tests {
         assert!(default.log_config().color(), "C 版 log-color 默认开启");
         assert!(!default.audit_soa());
         assert!(!default.audit_console());
+        assert_eq!(default.local_domain(), None);
     }
 
     /// data-dir 应改变相对 cache-file 的落点，绝对路径保持不变。

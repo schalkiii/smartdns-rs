@@ -93,21 +93,66 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsHostsMiddl
         if query.query_type().is_ip_addr() || is_ptr {
             let hosts = self.cached_hosts(ctx.cfg().hosts_file()).await;
 
-            if let Some(lookup) = hosts.lookup_static_host(query).or_else(|| {
-                let mut name = query.name().clone();
-                name.set_fqdn(!name.is_fqdn());
-                hosts.lookup_static_host(&Query::query(name, query.query_type()))
-            }) {
+            let found = hosts
+                .lookup_static_host(query)
+                .or_else(|| {
+                    let mut name = query.name().clone();
+                    name.set_fqdn(!name.is_fqdn());
+                    hosts.lookup_static_host(&Query::query(name, query.query_type()))
+                })
+                .map(|lookup| (lookup.records().to_vec(), lookup.valid_until()));
+
+            // local-domain 等价于给 hosts 条目补上后缀：查询侧剥离后缀再查基数名，
+            // 命中的记录改写成查询名后返回。
+            let found = match found {
+                Some(found) => Some(found),
+                None => {
+                    local_domain_base(query.name(), ctx.cfg().local_domain()).and_then(|base| {
+                        hosts
+                            .lookup_static_host(&Query::query(base, query.query_type()))
+                            .map(|lookup| {
+                                let valid_until = lookup.valid_until();
+                                let records = lookup
+                                    .records()
+                                    .iter()
+                                    .cloned()
+                                    .map(|mut record| {
+                                        record.set_name(query.name().clone());
+                                        record
+                                    })
+                                    .collect::<Vec<_>>();
+                                (records, valid_until)
+                            })
+                    })
+                }
+            };
+
+            if let Some((records, valid_until)) = found {
                 return Ok(DnsResponse::new_with_deadline(
                     query.clone(),
-                    lookup.records().to_vec(),
-                    lookup.valid_until(),
+                    records,
+                    valid_until,
                 ));
             }
         }
 
         next.run(ctx, req).await
     }
+}
+
+/// 若 `name` 属于 `suffix`，返回去掉后缀后的基名。
+fn local_domain_base(name: &Name, suffix: Option<&Name>) -> Option<Name> {
+    let suffix = suffix?;
+    if !suffix.zone_of(name) {
+        return None;
+    }
+
+    let name_str = name.to_utf8();
+    let suffix_str = suffix.to_utf8();
+    name_str
+        .strip_suffix(&format!(".{suffix_str}"))?
+        .parse()
+        .ok()
 }
 
 fn collect_hosts_signature(hosts_file_pattern: Option<&glob::Pattern>) -> HostsFileSignature {
@@ -349,5 +394,25 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(ip_addrs, vec![IpAddr::from_str("2.2.2.2").unwrap()]);
         Ok(())
+    }
+    #[test]
+    fn test_local_domain_base() {
+        let suffix: Name = "lan".parse().unwrap();
+        assert_eq!(
+            local_domain_base(&"host.lan".parse().unwrap(), Some(&suffix)),
+            Some("host".parse().unwrap())
+        );
+        // 后缀本身不剥离
+        assert_eq!(
+            local_domain_base(&"lan".parse().unwrap(), Some(&suffix)),
+            None
+        );
+        // 不同后缀不匹配
+        assert_eq!(
+            local_domain_base(&"host.example".parse().unwrap(), Some(&suffix)),
+            None
+        );
+        // 未配置 local-domain
+        assert_eq!(local_domain_base(&"host.lan".parse().unwrap(), None), None);
     }
 }
