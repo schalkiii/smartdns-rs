@@ -129,6 +129,7 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for NameServerMid
 
         if rtype.is_ip_addr() {
             let cfg = ctx.cfg();
+            let (ignore_ip, blacklist_ip, whitelist_ip) = cfg.ip_rule_sets_for(req.src().ip());
 
             let mut opts = match ctx.domain_rule.as_ref() {
                 Some(rule) => LookupIpOptions {
@@ -140,9 +141,9 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for NameServerMid
                         None => cfg.speed_check_mode().cloned(),
                     },
                     no_speed_check: ctx.server_opts.no_speed_check(),
-                    ignore_ip: cfg.ignore_ip().clone(),
-                    blacklist_ip: cfg.blacklist_ip().clone(),
-                    whitelist_ip: cfg.whitelist_ip().clone(),
+                    ignore_ip: ignore_ip.clone(),
+                    blacklist_ip: blacklist_ip.clone(),
+                    whitelist_ip: whitelist_ip.clone(),
                     ip_alias: cfg.ip_alias().clone(),
                     lookup_options,
                 },
@@ -150,9 +151,9 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for NameServerMid
                     response_strategy: cfg.response_mode(),
                     speed_check_mode: cfg.speed_check_mode().cloned(),
                     no_speed_check: ctx.server_opts.no_speed_check(),
-                    ignore_ip: cfg.ignore_ip().clone(),
-                    blacklist_ip: cfg.blacklist_ip().clone(),
-                    whitelist_ip: cfg.whitelist_ip().clone(),
+                    ignore_ip: ignore_ip.clone(),
+                    blacklist_ip: blacklist_ip.clone(),
+                    whitelist_ip: whitelist_ip.clone(),
                     ip_alias: cfg.ip_alias().clone(),
                     lookup_options,
                 },

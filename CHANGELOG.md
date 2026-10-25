@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### feat(conf): 支持 ip-rules 按客户端 CIDR 的过滤规则
+
+`ip-rules <cidr> [-blacklist-ip|-whitelist-ip|-bogus-nxdomain|-ignore-ip]`，可组合多个 flag。
+按请求源 IP 合并进 ignore/blacklist/whitelist 集合（无匹配时零拷贝复用全局集合）；
+bogus-nxdomain 在响应阶段按客户端规则过滤。
+测试：`test_parse`、`test_ip_rules_per_client`；cargo test 340+10+7 全绿。
+
 ### feat(log): 支持 log-syslog 与 audit-syslog
 
 - `log-syslog`：unix 上把日志额外转发到 syslog；非 unix 打印一条不支持告警。

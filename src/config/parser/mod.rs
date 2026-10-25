@@ -24,6 +24,7 @@ mod ip_set;
 mod iporset;
 // mod line;
 mod group_match;
+mod ip_rule;
 mod local_domain;
 mod log_level;
 mod nameserver;
@@ -132,6 +133,7 @@ pub enum ConfigItem {
     LocalDomain(LocalDomain),
     OdhcpdLeaseFile(PathBuf),
     GroupMatch(GroupMatch),
+    IpRule(IpRule),
     BindCertGenerate(bool),
     BindCertRootKeyFile(PathBuf),
     BindCertSan(san_list::SanList),
@@ -246,6 +248,7 @@ impl std::fmt::Display for ConfigItem {
             ConfigItem::LocalDomain(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::OdhcpdLeaseFile(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::GroupMatch(_) => write!(f, "# unsupported config item: {:?}", self)?,
+            ConfigItem::IpRule(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::BindCertGenerate(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::BindCertRootKeyFile(_) => {
                 write!(f, "# unsupported config item: {:?}", self)?
@@ -471,6 +474,7 @@ fn parse_line<'a>(input: &'a str) -> IResult<&'a str, ConfigLine<'a>> {
 
     let group2c = alt((
         map(config("group-match"), ConfigItem::GroupMatch),
+        map(config("ip-rules"), ConfigItem::IpRule),
         map(config("bind-cert-generate"), ConfigItem::BindCertGenerate),
         map(
             config("bind-cert-root-key-file"),

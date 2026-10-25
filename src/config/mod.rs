@@ -215,6 +215,11 @@ pub struct Config {
     /// force-no-CNAME [yes|no]
     pub force_no_cname: Option<bool>,
 
+    /// per-client-CIDR upstream filtering rules
+    ///
+    /// ip-rules [cidr] [-blacklist-ip|-whitelist-ip|-bogus-nxdomain|-ignore-ip]
+    pub ip_rules: Vec<IpRule>,
+
     /// force specific qtype return soa
     ///
     /// force-qtype-SOA [qtypeid |...]
@@ -479,6 +484,16 @@ pub enum HttpsRecordRule {
         no_ipv6_hint: bool,
     },
     RecordData(HTTPS),
+}
+
+/// 按客户端 CIDR 生效的上游过滤规则。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IpRule {
+    pub net: ipnet::IpNet,
+    pub blacklist: bool,
+    pub whitelist: bool,
+    pub bogus_nxdomain: bool,
+    pub ignore: bool,
 }
 
 /// `group-match -g <group> -d <domain> -c <cidr>` grouping sugar.

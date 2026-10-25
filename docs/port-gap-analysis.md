@@ -15,7 +15,7 @@ xerj search --url http://127.0.0.1:9300 --prefix smartdns-c "<问题>"
 ## 1. 配置指令覆盖
 
 C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令；Rust 解析器
-（`src/config/parser/`）支持 127 个键。逐项比对后，**C 有而 Rust 无的共 37 个（已补齐 26 个；group-end 为提取误报，实际已支持；剩余 10 个）**：
+（`src/config/parser/`）支持 127 个键。逐项比对后，**C 有而 Rust 无的共 37 个（已补齐 27 个；group-end 为提取误报，实际已支持；剩余 9 个）**：
 
 | 分类 | 指令 | 影响 | 状态 |
 | :--- | :--- | :--- | :--- |
@@ -36,7 +36,8 @@ C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令�
 | 运维 | `no-daemon` / `no-pidfile` / `restart-on-crash` | 守护进程行为 | 不移植（交给 systemd/Windows 服务） |
 | 运维 | `data-dir` | 数据目录（相对 cache-file 按此解析） | **本次已实现** |
 | 运维 | `debug-save-fail-packet` / `-dir` | 失败请求报文落盘 | **本次已实现** |
-| ACL | `acl-enable` / `ip-rules` | 客户端/IP 访问控制 | 待评估 |
+| ACL | `ip-rules` | 按客户端 CIDR 的上游过滤规则 | **本次已实现** |
+| ACL | `acl-enable` | 客户端访问控制 | 待设计（Rust 无 ACL 语法） |
 | 其它 | `odhcpd-lease-file` | OpenWrt odhcpd 租约解析 | **本次已实现** |
 | 其它 | `group-match` | 组匹配语法糖（域名 / 客户端 → 组） | **本次已实现** |
 | 其它 | `ddns-domain` / `plugin` | DDNS、插件框架 | 不移植 |
@@ -77,7 +78,7 @@ C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令�
 `dns_mw_cname::tests::test_strip_cname_records`（CNAME 裁剪）。
 `cargo test` 326 + 10 + 7 全绿，clippy 零告警，fmt 干净。
 
-## 6. 剩余优先级（滚动更新，当前 10 项）
+## 6. 剩余优先级（滚动更新，当前 9 项）
 
 2. `ipset` / `ipset-timeout` / `ipset-no-speed`（防火墙集成）
 3. `acl-enable` / `ip-rules`（访问控制，需要先定配置语法）
@@ -154,7 +155,6 @@ C 版中 `group-match` 只是语法糖：`-d` 等价 `nameserver /domain/group`�
 | 指令 | 方案 | 阻塞点 |
 | :--- | :--- | :--- |
 | `ipset` / `ipset-timeout` / `ipset-no-speed` | 新增 ipset 后端（netlink 或调用 `ipset` CLI），与 nftset 中间件对称 | 需要新的后端模块与 Linux 集成测试 |
-| `ip-rules` | 按客户端 CIDR 作用的上游过滤规则 | 现有 blacklist/ignore 是全局的，且过滤发生在无客户端上下文的上游解析层，需把客户端上下文传入 |
 | `acl-enable` | 客户端 ACL（拒绝/允许列表） | Rust 侧尚无 ACL 规则语法，需先设计配置格式 |
 
 不移植（`not-applicable`）：
@@ -188,3 +188,11 @@ C 版中 `group-match` 只是语法糖：`-d` 等价 `nameserver /domain/group`�
 - `audit-syslog yes`：审计记录改发 syslog（需同时开启 `audit-enable`）。
 - 依赖 `syslog = "7"` 仅在 `cfg(unix)` 下拉取；API 已对照源码核对。
 测试：`test_parity_directives`；cargo test 338+10+7 全绿，clippy 零告警。
+
+## 19. 第十四批实现：ip-rules
+
+- 语法：`ip-rules <cidr> [-blacklist-ip|-whitelist-ip|-bogus-nxdomain|-ignore-ip]`，可组合多个 flag。
+- 运行时：`dns_mw_ns` 按 `req.src().ip()` 用 `RuntimeConfig::ip_rule_sets_for` 把命中规则的网段
+  合并进本次请求的 ignore/blacklist/whitelist 集合（无匹配时零拷贝复用全局 `Arc`）；
+  `dns_mw_bogus` 用 `ip_rule_bogus_set_for` 处理客户端级 `-bogus-nxdomain`。
+测试：`config::parser::ip_rule::tests::test_parse`、`dns_conf::tests::test_ip_rules_per_client`。

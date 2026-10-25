@@ -629,6 +629,68 @@ impl RuntimeConfig {
         self.odhcpd_lease_file.as_deref()
     }
 
+    /// per-client-CIDR filtering rules
+    #[inline]
+    pub fn ip_rules(&self) -> &[IpRule] {
+        &self.ip_rules
+    }
+
+    /// 合并匹配该客户端 IP 的 ip-rules 到全局过滤集合。
+    ///
+    /// 返回 `(ignore, blacklist, whitelist)`；没有匹配规则时直接复用全局 `Arc`，零拷贝。
+    pub fn ip_rule_sets_for(&self, client_ip: IpAddr) -> (Arc<IpSet>, Arc<IpSet>, Arc<IpSet>) {
+        if self.ip_rules.is_empty() {
+            return (
+                self.ignore_ip().clone(),
+                self.blacklist_ip().clone(),
+                self.whitelist_ip().clone(),
+            );
+        }
+
+        let (mut ignore, mut blacklist, mut whitelist) = (Vec::new(), Vec::new(), Vec::new());
+        for rule in &self.ip_rules {
+            if !rule.net.contains(&client_ip) {
+                continue;
+            }
+            if rule.ignore {
+                ignore.push(rule.net);
+            }
+            if rule.blacklist {
+                blacklist.push(rule.net);
+            }
+            if rule.whitelist {
+                whitelist.push(rule.net);
+            }
+        }
+
+        let merge = |global: &Arc<IpSet>, extra: Vec<IpNet>| -> Arc<IpSet> {
+            if extra.is_empty() {
+                return global.clone();
+            }
+            let mut merged = (**global).clone();
+            for net in extra {
+                merged.insert(net, ());
+            }
+            Arc::new(merged)
+        };
+
+        (
+            merge(self.ignore_ip(), ignore),
+            merge(self.blacklist_ip(), blacklist),
+            merge(self.whitelist_ip(), whitelist),
+        )
+    }
+
+    /// 匹配该客户端 IP 的 `-bogus-nxdomain` 规则集合。
+    pub fn ip_rule_bogus_set_for(&self, client_ip: IpAddr) -> IpSet {
+        IpSet::new(
+            self.ip_rules
+                .iter()
+                .filter(|rule| rule.bogus_nxdomain && rule.net.contains(&client_ip))
+                .map(|rule| rule.net),
+        )
+    }
+
     /// nft set for addresses that fail the speed check
     #[inline]
     pub fn nftset_no_speed(&self) -> Option<&[ConfigForIP<NFTsetConfig>]> {
@@ -1151,6 +1213,7 @@ impl RuntimeConfigBuilder {
                 DataDir(v) => self.data_dir = Some(self.resolve_filepath(v)),
                 LocalDomain(v) => self.local_domain = v.0,
                 OdhcpdLeaseFile(v) => self.odhcpd_lease_file = Some(self.resolve_filepath(v)),
+                IpRule(v) => self.ip_rules.push(v),
                 GroupMatch(v) => {
                     for domain in v.domains {
                         rule_group.forward_rules.push(crate::config::ForwardRule {
@@ -2345,6 +2408,27 @@ mod tests {
         assert_eq!(
             default.debug_save_fail_packet_dir(),
             PathBuf::from("/tmp/smartdns")
+        );
+    }
+
+    /// ip-rules 只对匹配的客户端 CIDR 生效。
+    #[test]
+    fn test_ip_rules_per_client() {
+        let cfg = RuntimeConfig::builder()
+            .with("ip-rules 192.168.1.0/24 -blacklist-ip")
+            .with("ip-rules 10.0.0.0/8 -bogus-nxdomain")
+            .build()
+            .unwrap();
+
+        let (_, blacklist, _) = cfg.ip_rule_sets_for("192.168.1.5".parse().unwrap());
+        assert!(blacklist.contains(&"192.168.1.5".parse::<IpAddr>().unwrap()));
+        assert!(!blacklist.contains(&"10.1.2.3".parse::<IpAddr>().unwrap()));
+
+        let bogus = cfg.ip_rule_bogus_set_for("10.1.2.3".parse().unwrap());
+        assert!(bogus.contains(&"10.9.9.9".parse::<IpAddr>().unwrap()));
+        assert!(
+            cfg.ip_rule_bogus_set_for("192.168.1.5".parse().unwrap())
+                .is_empty()
         );
     }
 
