@@ -15,7 +15,7 @@ xerj search --url http://127.0.0.1:9300 --prefix smartdns-c "<问题>"
 ## 1. 配置指令覆盖
 
 C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令；Rust 解析器
-（`src/config/parser/`）支持 127 个键。逐项比对后，**C 有而 Rust 无的共 37 个（已补齐 24 个；group-end 为提取误报，实际已支持；剩余 12 个）**：
+（`src/config/parser/`）支持 127 个键。逐项比对后，**C 有而 Rust 无的共 37 个（已补齐 26 个；group-end 为提取误报，实际已支持；剩余 10 个）**：
 
 | 分类 | 指令 | 影响 | 状态 |
 | :--- | :--- | :--- | :--- |
@@ -30,7 +30,7 @@ C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令�
 | PTR | `local-ptr-enable` | 用 hosts 回答本机地址的 PTR（Rust 已有 `LocalPtrZoneProvider`，缺开关） | **本次已实现** |
 | 防火墙 | `ipset` / `ipset-timeout` / `ipset-no-speed` | ipset 下发与超时 | 待实现（nft 已有部分能力） |
 | 防火墙 | `nftset-timeout` / `nftset-debug` / `nftset-no-speed` | nftset 超时/调试 | `timeout`/`debug` **已实现**；`no-speed` 待实现 |
-| 日志 | `log-syslog` / `audit-syslog` / `audit-console` / `log-color` | 日志后端与着色 | 低优先级 |
+| 日志 | `log-syslog` / `audit-syslog` | syslog 后端（unix） | **本次已实现** |
 | 日志 | `audit-SOA` / `audit-console` | SOA 应答也审计 / 审计同时打印到控制台 | **本次已实现** |
 | 证书 | `bind-cert-generate` / `-root-key-file` / `-san` / `-validity-days` | 自签证书自动生成 | **本次已实现** |
 | 运维 | `no-daemon` / `no-pidfile` / `restart-on-crash` | 守护进程行为 | 不移植（交给 systemd/Windows 服务） |
@@ -77,7 +77,7 @@ C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令�
 `dns_mw_cname::tests::test_strip_cname_records`（CNAME 裁剪）。
 `cargo test` 326 + 10 + 7 全绿，clippy 零告警，fmt 干净。
 
-## 6. 剩余优先级（滚动更新，当前 12 项）
+## 6. 剩余优先级（滚动更新，当前 10 项）
 
 2. `ipset` / `ipset-timeout` / `ipset-no-speed`（防火墙集成）
 3. `acl-enable` / `ip-rules`（访问控制，需要先定配置语法）
@@ -156,7 +156,6 @@ C 版中 `group-match` 只是语法糖：`-d` 等价 `nameserver /domain/group`�
 | `ipset` / `ipset-timeout` / `ipset-no-speed` | 新增 ipset 后端（netlink 或调用 `ipset` CLI），与 nftset 中间件对称 | 需要新的后端模块与 Linux 集成测试 |
 | `ip-rules` | 按客户端 CIDR 作用的上游过滤规则 | 现有 blacklist/ignore 是全局的，且过滤发生在无客户端上下文的上游解析层，需把客户端上下文传入 |
 | `acl-enable` | 客户端 ACL（拒绝/允许列表） | Rust 侧尚无 ACL 规则语法，需先设计配置格式 |
-| `log-syslog` / `audit-syslog` | 增加 syslog writer（unix cfg） | 需引入 `syslog` 依赖，并接入 tracing MakeWriter |
 
 不移植（`not-applicable`）：
 
@@ -181,3 +180,11 @@ C 版中 `group-match` 只是语法糖：`-d` 等价 `nameserver /domain/group`�
 - `bind-cert-root-key-file`：用该 PEM 密钥作为 CA 签发；未配置则自签。
 实现：新增 `src/rustls_self_signed.rs`（rcgen 0.14），接入 `server::create_cert_resolver`。
 测试：`rustls_self_signed::tests::test_generate_self_signed`、`test_parity_directives`。
+
+## 18. 第十三批实现：log-syslog / audit-syslog
+
+- `log-syslog yes`：在 unix 上把 tracing 输出额外转发到 syslog（LOG_DAEMON）；
+  非 unix 平台启动时会打印一条 warn 说明不支持。
+- `audit-syslog yes`：审计记录改发 syslog（需同时开启 `audit-enable`）。
+- 依赖 `syslog = "7"` 仅在 `cfg(unix)` 下拉取；API 已对照源码核对。
+测试：`test_parity_directives`；cargo test 338+10+7 全绿，clippy 零告警。

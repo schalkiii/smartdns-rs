@@ -599,6 +599,12 @@ impl RuntimeConfig {
         self.audit.soa.unwrap_or_default()
     }
 
+    /// whether audit records are sent to syslog
+    #[inline]
+    pub fn audit_syslog(&self) -> bool {
+        self.audit.syslog.unwrap_or_default()
+    }
+
     /// whether audit records are also printed to the console
     #[inline]
     pub fn audit_console(&self) -> bool {
@@ -1166,6 +1172,8 @@ impl RuntimeConfigBuilder {
                 }
                 BindCertSan(v) => self.bind_cert_san = Some(v.0),
                 BindCertValidityDays(v) => self.bind_cert_validity_days = Some(v),
+                LogSyslog(v) => self.log.syslog = Some(v),
+                AuditSyslog(v) => self.audit.syslog = Some(v),
                 NftsetNoSpeed(v) => self.nftset_no_speed = Some(v.0),
                 DebugSaveFailPacketDir(v) => {
                     self.debug_save_fail_packet_dir = Some(self.resolve_filepath(v))
@@ -2280,6 +2288,8 @@ mod tests {
             .with("bind-cert-generate yes")
             .with("bind-cert-san dns.example.com,1.2.3.4")
             .with("bind-cert-validity-days 30")
+            .with("log-syslog yes")
+            .with("audit-syslog yes")
             .build()
             .unwrap();
 
@@ -2323,11 +2333,15 @@ mod tests {
             &["dns.example.com".to_string(), "1.2.3.4".to_string()]
         );
         assert_eq!(cfg.bind_cert_validity_days(), Some(30));
+        assert!(cfg.log_config().syslog());
+        assert!(cfg.audit_syslog());
         assert!(!default.debug_save_fail_packet());
         assert_eq!(default.nftset_no_speed(), None);
         assert!(!default.bind_cert_generate());
         assert!(default.bind_cert_san().is_empty());
         assert_eq!(default.bind_cert_validity_days(), None);
+        assert!(!default.log_config().syslog());
+        assert!(!default.audit_syslog());
         assert_eq!(
             default.debug_save_fail_packet_dir(),
             PathBuf::from("/tmp/smartdns")

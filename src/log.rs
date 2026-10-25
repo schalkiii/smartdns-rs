@@ -33,6 +33,7 @@ pub fn make_dispatch<P: AsRef<Path>>(
     mode: Option<u32>,
     to_console: bool,
     ansi: bool,
+    syslog: bool,
 ) -> Dispatch {
     let cli_level = INIT_CONSOLE_LEVEL.get().cloned();
     let level = match (level, cli_level) {
@@ -68,7 +69,7 @@ pub fn make_dispatch<P: AsRef<Path>>(
         // log hello
         {
             let writer = file.with_max_level(level);
-            let dispatch = internal_make_dispatch(level, filter, writer, true, false);
+            let dispatch = internal_make_dispatch(level, filter, writer, true, false, syslog);
 
             let _guard = set_default(&dispatch);
             crate::hello_starting();
@@ -84,12 +85,20 @@ pub fn make_dispatch<P: AsRef<Path>>(
                 file_writer.and(console_writer),
                 true,
                 ansi,
+                syslog,
             )
         } else {
-            internal_make_dispatch(level.max(console_level), filter, file_writer, true, false)
+            internal_make_dispatch(
+                level.max(console_level),
+                filter,
+                file_writer,
+                true,
+                false,
+                syslog,
+            )
         }
     } else if to_console {
-        internal_make_dispatch(console_level, filter, console_writer, true, ansi)
+        internal_make_dispatch(console_level, filter, console_writer, true, ansi, false)
     } else {
         Dispatch::none()
     }
@@ -104,7 +113,66 @@ pub fn console(console_level: Level) -> DefaultGuard {
         console_writer,
         false,
         true,
+        false,
     ))
+}
+
+#[cfg(unix)]
+mod syslog_backend {
+    use std::io;
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::fmt::MakeWriter;
+
+    type Logger = syslog::Logger<syslog::LoggerBackend, syslog::Formatter3164>;
+
+    /// 把 tracing 的整行输出转发到 syslog。
+    #[derive(Clone)]
+    pub struct SyslogWriter(Arc<Mutex<Logger>>);
+
+    impl SyslogWriter {
+        pub fn new() -> Option<Self> {
+            let formatter = syslog::Formatter3164 {
+                facility: syslog::Facility::LOG_DAEMON,
+                hostname: None,
+                process: "smartdns".to_string(),
+                pid: std::process::id(),
+            };
+            match syslog::unix(formatter) {
+                Ok(logger) => Some(Self(Arc::new(Mutex::new(logger)))),
+                Err(err) => {
+                    tracing::warn!("connect to syslog failed: {err}");
+                    None
+                }
+            }
+        }
+    }
+
+    pub struct SyslogLine(Arc<Mutex<Logger>>);
+
+    impl io::Write for SyslogLine {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            let text = String::from_utf8_lossy(buf);
+            let text = text.trim_end_matches(['\r', '\n']);
+            if !text.is_empty()
+                && let Ok(mut logger) = self.0.lock()
+            {
+                let _ = logger.info(text);
+            }
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for SyslogWriter {
+        type Writer = SyslogLine;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            SyslogLine(self.0.clone())
+        }
+    }
 }
 
 #[inline]
@@ -114,6 +182,7 @@ fn internal_make_dispatch<W: for<'writer> MakeWriter<'writer> + 'static + Send +
     writer: W,
     diagnostic: bool,
     ansi: bool,
+    syslog: bool,
 ) -> Dispatch {
     let layer = tracing_subscriber::fmt::layer()
         .event_format(TdnsFormatter)
@@ -123,6 +192,24 @@ fn internal_make_dispatch<W: for<'writer> MakeWriter<'writer> + 'static + Send +
     let subscriber = tracing_subscriber::registry()
         .with(layer)
         .with(make_filter(level, filter));
+
+    #[cfg(unix)]
+    let subscriber = subscriber.with(
+        if syslog {
+            syslog_backend::SyslogWriter::new()
+        } else {
+            None
+        }
+        .map(|writer| {
+            tracing_subscriber::fmt::layer()
+                .event_format(TdnsFormatter)
+                .with_writer(writer)
+        }),
+    );
+    #[cfg(not(unix))]
+    if syslog {
+        tracing::warn!("log-syslog is only supported on unix");
+    }
 
     if diagnostic {
         #[cfg(feature = "future-diagnostic")]

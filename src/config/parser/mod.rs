@@ -136,6 +136,8 @@ pub enum ConfigItem {
     BindCertRootKeyFile(PathBuf),
     BindCertSan(san_list::SanList),
     BindCertValidityDays(u64),
+    LogSyslog(bool),
+    AuditSyslog(bool),
     NftsetNoSpeed(nftset::NftSetList),
     DebugSaveFailPacket(bool),
     DebugSaveFailPacketDir(PathBuf),
@@ -252,6 +254,8 @@ impl std::fmt::Display for ConfigItem {
             ConfigItem::BindCertValidityDays(_) => {
                 write!(f, "# unsupported config item: {:?}", self)?
             }
+            ConfigItem::LogSyslog(_) => write!(f, "# unsupported config item: {:?}", self)?,
+            ConfigItem::AuditSyslog(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::NftsetNoSpeed(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::DebugSaveFailPacket(_) => {
                 write!(f, "# unsupported config item: {:?}", self)?
@@ -463,6 +467,9 @@ fn parse_line<'a>(input: &'a str) -> IResult<&'a str, ConfigLine<'a>> {
         map(config("audit-console"), ConfigItem::AuditConsole),
         map(config("local-domain"), ConfigItem::LocalDomain),
         map(config("odhcpd-lease-file"), ConfigItem::OdhcpdLeaseFile),
+    ));
+
+    let group2c = alt((
         map(config("group-match"), ConfigItem::GroupMatch),
         map(config("bind-cert-generate"), ConfigItem::BindCertGenerate),
         map(
@@ -474,6 +481,8 @@ fn parse_line<'a>(input: &'a str) -> IResult<&'a str, ConfigLine<'a>> {
             config("bind-cert-validity-days"),
             ConfigItem::BindCertValidityDays,
         ),
+        map(config("log-syslog"), ConfigItem::LogSyslog),
+        map(config("audit-syslog"), ConfigItem::AuditSyslog),
         map(config("nftset-no-speed"), ConfigItem::NftsetNoSpeed),
         map(
             config("debug-save-fail-packet"),
@@ -538,7 +547,7 @@ fn parse_line<'a>(input: &'a str) -> IResult<&'a str, ConfigLine<'a>> {
         map(NomParser::parse, ConfigItem::Server),
     ));
 
-    let group = alt((group1, group2, group2b, group3, group4, group5));
+    let group = alt((group1, group2, group2b, group2c, group3, group4, group5));
 
     alt((
         map(

@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### feat(log): 支持 log-syslog 与 audit-syslog
+
+- `log-syslog`：unix 上把日志额外转发到 syslog；非 unix 打印一条不支持告警。
+- `audit-syslog`：审计记录改发 syslog（需开启 audit-enable）。
+- `DnsAuditMiddleware::new` 参数收敛为 `AuditOptions`，消除 too_many_arguments 告警。
+测试：`test_parity_directives`；cargo test 338+10+7 全绿，clippy 0。
+
 ### feat(tls): 支持 bind-cert-generate 自签证书家族
 
 - `bind-cert-generate`：未配置证书时自动生成/复用自签证书（落在 data-dir）。

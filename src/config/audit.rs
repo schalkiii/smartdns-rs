@@ -28,6 +28,11 @@ pub struct AuditConfig {
     /// audit-SOA [yes|no]
     pub soa: Option<bool>,
 
+    /// send audit records to syslog (unix only)
+    ///
+    /// audit-syslog [yes|no]
+    pub syslog: Option<bool>,
+
     /// duplicate audit records to the console
     ///
     /// audit-console [yes|no]

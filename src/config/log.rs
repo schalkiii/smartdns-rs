@@ -25,6 +25,11 @@ pub struct LogConfig {
     /// number of logs, 0 means disable log
     pub num: Option<u64>,
 
+    /// send log records to syslog (unix only)
+    ///
+    /// log-syslog [yes|no]
+    pub syslog: Option<bool>,
+
     /// colorize console output, enabled by default
     ///
     /// log-color [yes|no]
@@ -45,5 +50,9 @@ impl LogConfig {
 
     pub fn color(&self) -> bool {
         self.color.unwrap_or(true)
+    }
+
+    pub fn syslog(&self) -> bool {
+        self.syslog.unwrap_or_default()
     }
 }

@@ -116,20 +116,34 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsAuditMiddl
     }
 }
 
+/// 审计输出配置。
+#[derive(Debug, Clone, Default)]
+pub struct AuditOptions {
+    pub file: Option<PathBuf>,
+    pub size: u64,
+    pub num: usize,
+    pub mode: Option<u32>,
+    pub soa: bool,
+    pub console: bool,
+    pub syslog: bool,
+}
+
 impl DnsAuditMiddleware {
     /// 构建审计中间件。
     ///
     /// `query_log` 为 WebUI 查询日志环形缓冲（始终写入，无论是否启用磁盘审计）；
     /// `audit_file` 为可选的磁盘审计文件路径，仅在启用审计文件时传入，否则仅写入内存查询日志。
-    pub fn new(
-        query_log: Arc<Mutex<VecDeque<QueryLogEntry>>>,
-        audit_file: Option<PathBuf>,
-        audit_size: u64,
-        audit_num: usize,
-        mode: Option<u32>,
-        audit_soa: bool,
-        audit_console: bool,
-    ) -> Self {
+    pub fn new(query_log: Arc<Mutex<VecDeque<QueryLogEntry>>>, options: AuditOptions) -> Self {
+        let AuditOptions {
+            file: audit_file,
+            size: audit_size,
+            num: audit_num,
+            mode,
+            soa: audit_soa,
+            console: audit_console,
+            syslog: audit_syslog,
+        } = options;
+
         let (audit_tx, mut audit_rx) = mpsc::channel::<DnsAuditRecord>(100);
 
         if let Some(audit_file) = audit_file {
@@ -155,6 +169,28 @@ impl DnsAuditMiddleware {
                     }
                 }
             });
+        } else if audit_syslog {
+            #[cfg(unix)]
+            tokio::spawn(async move {
+                let formatter = syslog::Formatter3164 {
+                    facility: syslog::Facility::LOG_DAEMON,
+                    hostname: None,
+                    process: "smartdns-audit".to_string(),
+                    pid: std::process::id(),
+                };
+                let mut logger = syslog::unix(formatter).ok();
+
+                while let Some(audit) = audit_rx.recv().await {
+                    if let Some(logger) = logger.as_mut() {
+                        let _ = logger.info(&audit.to_string_without_date());
+                    }
+                }
+            });
+            #[cfg(not(unix))]
+            {
+                warn!("audit-syslog is only supported on unix");
+                drop(audit_rx);
+            }
         } else {
             // 无磁盘审计：丢弃文件写入通道，避免通道无限堆积。
             drop(audit_rx);

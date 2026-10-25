@@ -339,6 +339,7 @@ pub fn serve(cfg: Arc<RuntimeConfig>) {
         cfg.log_file_mode().into(),
         cfg.log_config().console(),
         cfg.log_config().color(),
+        cfg.log_config().syslog(),
     );
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -730,27 +731,18 @@ fn build_middleware(
         } else {
             None
         };
-        if audit_file.is_some() {
-            builder = builder.with(DnsAuditMiddleware::new(
-                query_log.clone(),
-                audit_file,
-                cfg.audit_size(),
-                cfg.audit_num(),
-                Some(cfg.audit_file_mode()),
-                cfg.audit_soa(),
-                cfg.audit_console(),
-            ));
-        } else {
-            builder = builder.with(DnsAuditMiddleware::new(
-                query_log.clone(),
-                None,
-                0,
-                0,
-                None,
-                cfg.audit_soa(),
-                cfg.audit_console(),
-            ));
-        }
+        let audit_syslog = cfg.audit_enable() && cfg.audit_syslog();
+
+        let audit_options = crate::dns_mw_audit::AuditOptions {
+            file: audit_file,
+            size: cfg.audit_size(),
+            num: cfg.audit_num(),
+            mode: Some(cfg.audit_file_mode()),
+            soa: cfg.audit_soa(),
+            console: cfg.audit_console(),
+            syslog: audit_syslog,
+        };
+        builder = builder.with(DnsAuditMiddleware::new(query_log.clone(), audit_options));
 
         if cfg.rule_groups().values().any(|x| !x.cnames.is_empty()) {
             builder = builder.with(DnsCNameMiddleware);
