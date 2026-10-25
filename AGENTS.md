@@ -165,7 +165,7 @@ SmartDNS supports:
 | File | Role |
 | :--- | :--- |
 | `etc/smartdns/smartdns.conf` | Out-of-the-box config. Embedded into the binary as `crate::DEFAULT_CONF` (`src/main.rs`), it is what `smartdns service install` writes to `CONF_PATH` **and** what release packages / the MSI ship. It must contain working upstreams and listeners. |
-| `etc/smartdns/example.conf` | Fully commented option reference. `build.rs::download_resources` fetches it from upstream C SmartDNS when missing; it has no upstream servers, so it is never a usable default. |
+| `etc/smartdns/example.conf` | Upstream C option reference, comments only — it covers the C directive set and omits the Rust-only options, so it is not a complete list. `build.rs::download_resources` fetches it from upstream C SmartDNS when missing; it has no upstream servers, so it is never a usable default. |
 
 ⚠️ Keep the template download pointed at `example.conf`. If it points at `smartdns.conf`, a fresh
 clone silently replaces the curated default with the comment-only template — and that same file is
@@ -178,8 +178,9 @@ servers and `fastest-response`. Run it after touching either file.
 ### Example Configuration (smartdns.conf)
 
 语法是 C SmartDNS 的近亲但**不是子集**：`bind-address` / `nameserver` / `address-rule` /
-`blacklist-ip` 这类 C 写法本解析器不接受，写了只会被忽略。完整选项以
-`etc/smartdns/example.conf` 为准，可用的最小片段：
+`blacklist-ip` 这类 C 写法本解析器不接受，写了只会被忽略。全量选项以 parser 枚举为准
+（`grep -oE 'config\("[^"]*"\)|tag_no_case\("[^"]*"\)' src/config/parser/*.rs | sort -u`），逐项写法与取值建议见
+`docs/port-gap-analysis.md` §22；`etc/smartdns/example.conf` 只覆盖 C 版子集。可用的最小片段：
 
 ```conf
 # 监听 53（IPv4 + IPv6）
@@ -205,7 +206,7 @@ hosts-file /etc/hosts
 dnsmasq-lease-file /var/lib/misc/dnsmasq.leases
 ```
 
-解析器支持的全部键可通过 `grep -o 'config("[^"]*")' src/config/parser/*.rs` 枚举。
+解析器支持的全部键可通过 `grep -oE 'config\("[^"]*"\)|tag_no_case\("[^"]*"\)' src/config/parser/*.rs | sort -u` 枚举。
 
 ### Loading Configuration
 
