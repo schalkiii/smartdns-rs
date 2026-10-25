@@ -59,6 +59,8 @@ impl From<&DnsAuditRecord> for QueryLogEntry {
 pub struct DnsAuditMiddleware {
     audit_sender: Sender<DnsAuditRecord>,
     query_log: Arc<Mutex<VecDeque<QueryLogEntry>>>,
+    audit_soa: bool,
+    audit_console: bool,
 }
 
 #[async_trait::async_trait]
@@ -74,6 +76,11 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsAuditMiddl
         let start = Instant::now();
 
         let res = next.run(ctx, req).await;
+
+        // 对应 C 版 audit.c:127：SOA-only 应答默认不写审计，audit-SOA yes 时才记录
+        if !self.audit_soa && is_soa_only(&res) {
+            return res;
+        }
 
         let duration = start.elapsed();
 
@@ -120,6 +127,8 @@ impl DnsAuditMiddleware {
         audit_size: u64,
         audit_num: usize,
         mode: Option<u32>,
+        audit_soa: bool,
+        audit_console: bool,
     ) -> Self {
         let (audit_tx, mut audit_rx) = mpsc::channel::<DnsAuditRecord>(100);
 
@@ -137,6 +146,11 @@ impl DnsAuditMiddleware {
                         if let Err(err) = record_audit_to_file(&mut audit_file, buf.as_slice()) {
                             warn!("log audit failed {}", err)
                         }
+                        if audit_console {
+                            for record in buf.iter() {
+                                println!("{}", record.to_string_without_date());
+                            }
+                        }
                         buf.clear();
                     }
                 }
@@ -149,6 +163,8 @@ impl DnsAuditMiddleware {
         Self {
             audit_sender: audit_tx,
             query_log,
+            audit_soa,
+            audit_console,
         }
     }
 }
@@ -222,6 +238,25 @@ impl std::fmt::Display for DnsAuditRecord {
             self.fmt_result()
         )
     }
+}
+
+/// 判断应答是否为“只有 SOA、没有任何地址记录”的空应答。
+fn is_soa_only(result: &Result<DnsResponse, DnsError>) -> bool {
+    let Ok(res) = result else {
+        return false;
+    };
+
+    let mut has_soa = false;
+    let mut has_ip = false;
+    for record in res.records() {
+        match record.record_type() {
+            RecordType::SOA => has_soa = true,
+            RecordType::A | RecordType::AAAA => has_ip = true,
+            _ => {}
+        }
+    }
+
+    has_soa && !has_ip
 }
 
 fn record_audit_to_file(

@@ -132,6 +132,11 @@ pub struct Config {
 
     pub cache: CacheConfig,
 
+    /// base directory for runtime data files (persisted cache)
+    ///
+    /// data-dir [path]
+    pub data_dir: Option<PathBuf>,
+
     /// List of hosts that supply bogus NX domain results
     pub bogus_nxdomain: Vec<IpOrSet>,
 

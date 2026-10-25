@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### feat(conf): 补齐 server-http3、data-dir、log-color 与审计开关
+
+- `server-http3`：`server-h3` 的等价别名（h3://）。
+- `data-dir`：相对 `cache-file` 以此目录为基准；绝对路径不变。
+- `log-color`：控制台日志 ANSI 着色，默认开启（对齐 C 版默认）。
+- `audit-SOA`：默认关闭；只有 SOA、没有地址记录的应答不写审计（C `audit.c:127`）。
+- `audit-console`：审计记录同时打印到控制台（C `audit.c:200`）。
+测试：`test_parity_directives`、`test_data_dir_resolves_relative_cache_file`、
+`test_config_nameserver`；cargo test 328+10+7 全绿，clippy 零告警，fmt 干净。
+
 ### feat(conf): 补齐 nftset 超时/调试与监听 socket 缓冲配置
 
 - `nftset-timeout`：开启后 nftset 元素带 `TTL * 3` 的超时（原来恒为 0，即永不过期），

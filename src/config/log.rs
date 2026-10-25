@@ -25,6 +25,11 @@ pub struct LogConfig {
     /// number of logs, 0 means disable log
     pub num: Option<u64>,
 
+    /// colorize console output, enabled by default
+    ///
+    /// log-color [yes|no]
+    pub color: Option<bool>,
+
     /// log file mode
     #[serde(with = "serde_opt_str")]
     pub file_mode: Option<FileMode>,
@@ -36,5 +41,9 @@ pub struct LogConfig {
 impl LogConfig {
     pub fn console(&self) -> bool {
         self.console.unwrap_or(true)
+    }
+
+    pub fn color(&self) -> bool {
+        self.color.unwrap_or(true)
     }
 }

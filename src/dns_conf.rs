@@ -350,10 +350,15 @@ impl RuntimeConfig {
     /// cache persist file
     #[inline]
     pub fn cache_file(&self) -> PathBuf {
-        self.cache
-            .file
-            .to_owned()
-            .unwrap_or_else(|| std::env::temp_dir().join("smartdns.cache"))
+        match self.cache.file.as_ref() {
+            // 相对路径按 data-dir 解析（data-dir 未配置时退回临时目录）
+            Some(file) if file.is_relative() => match self.data_dir() {
+                Some(dir) => dir.join(file),
+                None => std::env::temp_dir().join(file),
+            },
+            Some(file) => file.to_owned(),
+            None => std::env::temp_dir().join("smartdns.cache"),
+        }
     }
 
     /// prefetch domain
@@ -580,6 +585,24 @@ impl RuntimeConfig {
     #[inline]
     pub fn audit_file(&self) -> Option<&Path> {
         self.audit.file.as_deref()
+    }
+
+    /// whether SOA-only responses are written to the audit log
+    #[inline]
+    pub fn audit_soa(&self) -> bool {
+        self.audit.soa.unwrap_or_default()
+    }
+
+    /// whether audit records are also printed to the console
+    #[inline]
+    pub fn audit_console(&self) -> bool {
+        self.audit.console.unwrap_or_default()
+    }
+
+    /// base directory for runtime data files
+    #[inline]
+    pub fn data_dir(&self) -> Option<&Path> {
+        self.data_dir.as_deref()
     }
 
     #[inline]
@@ -1057,6 +1080,10 @@ impl RuntimeConfigBuilder {
                 NftsetTimeoutEnable(v) => self.nftset_timeout_enable = Some(v),
                 NftsetDebug(v) => self.nftset_debug = Some(v),
                 SocketBuffSize(v) => self.socket_buff_size = Some(v),
+                DataDir(v) => self.data_dir = Some(self.resolve_filepath(v)),
+                LogColor(v) => self.log.color = Some(v),
+                AuditSoa(v) => self.audit.soa = Some(v),
+                AuditConsole(v) => self.audit.console = Some(v),
                 CacheSize(v) => self.cache.size = Some(v),
                 ForceQtypeSoa(v) => {
                     self.force_qtype_soa.insert(v);
@@ -2150,6 +2177,10 @@ mod tests {
             .with("nftset-timeout yes")
             .with("nftset-debug yes")
             .with("socket-buff-size 262144")
+            .with("data-dir /tmp/smartdns-data")
+            .with("log-color no")
+            .with("audit-SOA yes")
+            .with("audit-console yes")
             .build()
             .unwrap();
 
@@ -2160,11 +2191,40 @@ mod tests {
         assert!(cfg.nftset_timeout_enable());
         assert!(cfg.nftset_debug());
         assert_eq!(cfg.socket_buff_size(), Some(262144));
+        assert_eq!(cfg.data_dir(), Some(Path::new("/tmp/smartdns-data")));
+        assert!(!cfg.log_config().color());
+        assert!(cfg.audit_soa());
+        assert!(cfg.audit_console());
 
         let default = RuntimeConfig::default();
         assert_eq!(default.max_query_limit(), 65535, "C 版默认上限");
         assert!(!default.force_no_cname());
         assert!(default.local_ptr_enable(), "C 版默认开启本地 PTR");
         assert_eq!(default.serve_expired_prefetch_time(), 0);
+        assert!(default.log_config().color(), "C 版 log-color 默认开启");
+        assert!(!default.audit_soa());
+        assert!(!default.audit_console());
+    }
+
+    /// data-dir 应改变相对 cache-file 的落点，绝对路径保持不变。
+    #[test]
+    fn test_data_dir_resolves_relative_cache_file() {
+        let cfg = RuntimeConfig::builder()
+            .with("data-dir /tmp/smartdns-data")
+            .with("cache-file smartdns.cache")
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            cfg.cache_file(),
+            Path::new("/tmp/smartdns-data").join("smartdns.cache")
+        );
+
+        let cfg = RuntimeConfig::builder()
+            .with("data-dir /tmp/smartdns-data")
+            .with("cache-file /var/cache/smartdns.cache")
+            .build()
+            .unwrap();
+        assert_eq!(cfg.cache_file(), PathBuf::from("/var/cache/smartdns.cache"));
     }
 }

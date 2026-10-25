@@ -124,6 +124,10 @@ pub enum ConfigItem {
     LocalPtrEnable(bool),
     MaxQueryLimit(usize),
     SocketBuffSize(usize),
+    DataDir(PathBuf),
+    LogColor(bool),
+    AuditSoa(bool),
+    AuditConsole(bool),
     ForceQtypeSoa(RecordType),
     ForwardRule(ForwardRule),
     HostsFile(glob::Pattern),
@@ -221,6 +225,10 @@ impl std::fmt::Display for ConfigItem {
             ConfigItem::LocalPtrEnable(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::MaxQueryLimit(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::SocketBuffSize(_) => write!(f, "# unsupported config item: {:?}", self)?,
+            ConfigItem::DataDir(_) => write!(f, "# unsupported config item: {:?}", self)?,
+            ConfigItem::LogColor(_) => write!(f, "# unsupported config item: {:?}", self)?,
+            ConfigItem::AuditSoa(_) => write!(f, "# unsupported config item: {:?}", self)?,
+            ConfigItem::AuditConsole(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::ServeExpiredPrefetchTime(_) => {
                 write!(f, "# unsupported config item: {:?}", self)?
             }
@@ -415,6 +423,10 @@ fn parse_line<'a>(input: &'a str) -> IResult<&'a str, ConfigLine<'a>> {
         map(config("nftset-timeout"), ConfigItem::NftsetTimeoutEnable),
         map(config("nftset-debug"), ConfigItem::NftsetDebug),
         map(config("socket-buff-size"), ConfigItem::SocketBuffSize),
+        map(config("data-dir"), ConfigItem::DataDir),
+        map(config("log-color"), ConfigItem::LogColor),
+        map(config("audit-SOA"), ConfigItem::AuditSoa),
+        map(config("audit-console"), ConfigItem::AuditConsole),
     ));
 
     let group3 = alt((

@@ -338,6 +338,7 @@ pub fn serve(cfg: Arc<RuntimeConfig>) {
         cfg.log_num(),
         cfg.log_file_mode().into(),
         cfg.log_config().console(),
+        cfg.log_config().color(),
     );
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -730,9 +731,19 @@ fn build_middleware(
                 cfg.audit_size(),
                 cfg.audit_num(),
                 Some(cfg.audit_file_mode()),
+                cfg.audit_soa(),
+                cfg.audit_console(),
             ));
         } else {
-            builder = builder.with(DnsAuditMiddleware::new(query_log.clone(), None, 0, 0, None));
+            builder = builder.with(DnsAuditMiddleware::new(
+                query_log.clone(),
+                None,
+                0,
+                0,
+                None,
+                cfg.audit_soa(),
+                cfg.audit_console(),
+            ));
         }
 
         if cfg.rule_groups().values().any(|x| !x.cnames.is_empty()) {

@@ -23,6 +23,16 @@ pub struct AuditConfig {
     /// ```
     pub file: Option<PathBuf>,
 
+    /// include SOA-only responses in the audit log
+    ///
+    /// audit-SOA [yes|no]
+    pub soa: Option<bool>,
+
+    /// duplicate audit records to the console
+    ///
+    /// audit-console [yes|no]
+    pub console: Option<bool>,
+
     /// audit-size size of each audit file, support k,m,g
     pub size: Option<Byte>,
 

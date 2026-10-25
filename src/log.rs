@@ -32,6 +32,7 @@ pub fn make_dispatch<P: AsRef<Path>>(
     num: u64,
     mode: Option<u32>,
     to_console: bool,
+    ansi: bool,
 ) -> Dispatch {
     let cli_level = INIT_CONSOLE_LEVEL.get().cloned();
     let level = match (level, cli_level) {
@@ -67,7 +68,7 @@ pub fn make_dispatch<P: AsRef<Path>>(
         // log hello
         {
             let writer = file.with_max_level(level);
-            let dispatch = internal_make_dispatch(level, filter, writer, true);
+            let dispatch = internal_make_dispatch(level, filter, writer, true, false);
 
             let _guard = set_default(&dispatch);
             crate::hello_starting();
@@ -82,12 +83,13 @@ pub fn make_dispatch<P: AsRef<Path>>(
                 filter,
                 file_writer.and(console_writer),
                 true,
+                ansi,
             )
         } else {
-            internal_make_dispatch(level.max(console_level), filter, file_writer, true)
+            internal_make_dispatch(level.max(console_level), filter, file_writer, true, false)
         }
     } else if to_console {
-        internal_make_dispatch(console_level, filter, console_writer, true)
+        internal_make_dispatch(console_level, filter, console_writer, true, ansi)
     } else {
         Dispatch::none()
     }
@@ -101,6 +103,7 @@ pub fn console(console_level: Level) -> DefaultGuard {
         None,
         console_writer,
         false,
+        true,
     ))
 }
 
@@ -110,9 +113,11 @@ fn internal_make_dispatch<W: for<'writer> MakeWriter<'writer> + 'static + Send +
     filter: Option<&str>,
     writer: W,
     diagnostic: bool,
+    ansi: bool,
 ) -> Dispatch {
     let layer = tracing_subscriber::fmt::layer()
         .event_format(TdnsFormatter)
+        .with_ansi(ansi)
         .with_writer(writer);
 
     let subscriber = tracing_subscriber::registry()

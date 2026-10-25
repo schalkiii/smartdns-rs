@@ -15,7 +15,7 @@ xerj search --url http://127.0.0.1:9300 --prefix smartdns-c "<问题>"
 ## 1. 配置指令覆盖
 
 C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令；Rust 解析器
-（`src/config/parser/`）支持 127 个键。逐项比对后，**C 有而 Rust 无的共 37 个（已补齐 8 个，剩余 29 个）**：
+（`src/config/parser/`）支持 127 个键。逐项比对后，**C 有而 Rust 无的共 37 个（已补齐 13 个；group-end 为提取误报，实际已支持；剩余 23 个）**：
 
 | 分类 | 指令 | 影响 | 状态 |
 | :--- | :--- | :--- | :--- |
@@ -31,12 +31,14 @@ C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令�
 | 防火墙 | `ipset` / `ipset-timeout` / `ipset-no-speed` | ipset 下发与超时 | 待实现（nft 已有部分能力） |
 | 防火墙 | `nftset-timeout` / `nftset-debug` / `nftset-no-speed` | nftset 超时/调试 | `timeout`/`debug` **已实现**；`no-speed` 待实现 |
 | 日志 | `log-syslog` / `audit-syslog` / `audit-console` / `log-color` | 日志后端与着色 | 低优先级 |
-| 日志 | `audit-SOA` | SOA 应答也审计 | 低优先级 |
+| 日志 | `audit-SOA` / `audit-console` | SOA 应答也审计 / 审计同时打印到控制台 | **本次已实现** |
 | 证书 | `bind-cert-generate` / `-root-key-file` / `-san` / `-validity-days` | 自签证书自动生成 | 低优先级（可用外部证书） |
 | 运维 | `no-daemon` / `no-pidfile` / `restart-on-crash` | 守护进程行为 | 不移植（交给 systemd/Windows 服务） |
-| 运维 | `data-dir` / `debug-save-fail-packet*` | 数据目录 / 失败报文落盘 | 低优先级 |
+| 运维 | `data-dir` | 数据目录（相对 cache-file 按此解析） | **本次已实现** |
+| 运维 | `debug-save-fail-packet*` | 失败报文落盘 | 低优先级 |
 | ACL | `acl-enable` / `ip-rules` | 客户端/IP 访问控制 | 待评估 |
-| 其它 | `ddns-domain` / `plugin` / `odhcpd-lease-file` / `group-match` | DDNS、插件框架、OpenWrt 租约 | 不移植 / 待评估 |
+| 其它 | `odhcpd-lease-file` | OpenWrt odhcpd 租约解析 | 待实现 |
+| 其它 | `ddns-domain` / `plugin` / `group-match` | DDNS、插件框架、组匹配 | 不移植 / 待评估 |
 
 ## 2. 本次实现：`txt-record`
 
@@ -74,15 +76,15 @@ C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令�
 `dns_mw_cname::tests::test_strip_cname_records`（CNAME 裁剪）。
 `cargo test` 326 + 10 + 7 全绿，clippy 零告警，fmt 干净。
 
-## 6. 剩余优先级（滚动更新，当前 29 项）
+## 6. 剩余优先级（滚动更新，当前 23 项）
 
 1. `local-domain`（本地域 + hosts 后缀展开）
 2. `cache-mem-size`（需逐条缓存内存核算）
 3. `ipset` / `ipset-timeout` / `ipset-no-speed`、`nftset-no-speed`（防火墙集成）
 4. `acl-enable` / `ip-rules`（访问控制，需要先定配置语法）
-5. `log-syslog` / `audit-syslog` / `audit-console` / `log-color` / `audit-SOA`
+5. `log-syslog` / `audit-syslog`（syslog 后端）
 6. `bind-cert-generate` 等 4 项自签证书配置（需引入 rcgen）
-7. `data-dir`、`odhcpd-lease-file`、`debug-save-fail-packet*`、`group-match`、`server-http3`
+7. `odhcpd-lease-file`、`debug-save-fail-packet*`、`group-match`
 8. 不移植：`plugin`、`ddns-domain`、`no-daemon` / `no-pidfile` / `restart-on-crash`
 
 ## 7. 第三批实现：SRV 多值
@@ -99,3 +101,13 @@ C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令�
 - `socket-buff-size`：监听 socket 在 bind 前设置 SO_RCVBUF/SO_SNDBUF，
   `serve()` 把配置透传给 UDP/TCP/DoT/DoH/DoH3/DoQ 全部监听器。
 - 测试：`dns_conf::tests::test_parity_directives` 覆盖两个指令的解析。
+
+## 9. 第五批实现：server-http3、data-dir、日志颜色与审计开关
+
+- `server-http3`：与 `server-h3` 等价的别名（解析为 `h3://`）。
+- `data-dir`：相对 `cache-file` 按 data-dir 解析，绝对路径不变。
+- `log-color`：默认开启，控制台日志 ANSI 着色可关闭。
+- `audit-SOA`：默认关闭；SOA-only 应答不进审计（对应 C `audit.c:127`）。
+- `audit-console`：审计记录同时打印到控制台（对应 C `audit.c:200`）。
+测试：`test_parity_directives`、`test_data_dir_resolves_relative_cache_file`、
+`test_config_nameserver`（server-http3）。

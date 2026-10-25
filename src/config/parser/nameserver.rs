@@ -35,6 +35,7 @@ impl NomParser for NameServerInfo {
             ),
             #[cfg(feature = "dns-over-h3")]
             preceded(tag_no_case("server-h3"), preceded(space1, dns_url("h3"))),
+            preceded(tag_no_case("server-http3"), preceded(space1, dns_url("h3"))),
             #[cfg(feature = "dns-over-quic")]
             preceded(
                 tag_no_case("server-quic"),
@@ -200,6 +201,17 @@ mod tests {
                 "",
                 NameServerInfo {
                     server: DnsUrl::from_str("tls://8.8.8.8:853").unwrap(),
+                    ..name_server_default()
+                }
+            ))
+        );
+
+        assert_eq!(
+            NameServerInfo::parse("server-http3 dns.example.com"),
+            Ok((
+                "",
+                NameServerInfo {
+                    server: DnsUrl::from_str("h3://dns.example.com").unwrap(),
                     ..name_server_default()
                 }
             ))
