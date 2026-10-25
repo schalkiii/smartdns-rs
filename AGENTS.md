@@ -365,12 +365,18 @@ Releases are produced entirely by `.github/workflows/build.yml` (reusable; calle
 `version.yml` for tagged releases and by `nightly.yml` for nightly artifacts).
 
 ```bash
-# cut a release: bump version, tag, build every target, publish, publish to crates.io
+# cut a release: bump version, tag, build every target, publish the GitHub Release
 gh workflow run version.yml -f bump=patch
 
 # rebuild + republish an existing tag (no version bump)
 gh workflow run build.yml --ref main -f version=v0.13.3
 ```
+
+⚠️ `version.yml` 的 `publish` job（`just publish` → `cargo publish --no-verify`）**不是发版的一部分，且当前必然失败**：
+`hickory-proto` / `hickory-resolver` / `rustls-pki-types` 只有 git 依赖（`mokeyish` fork 的补丁版本，crates.io 上无对应发布），
+`cargo publish` 会在 manifest 校验阶段报 `all dependencies must have a version requirement specified when publishing`。
+该步骤带 `continue-on-error: true`，所以 job 显示绿、日志里留着 `##[error]`；本 fork 也没有配置 `CARGO_REGISTRY_TOKEN`。
+除非先把 fork 补丁发到 crates.io（或改为 vendor 依赖）并配上 token，否则不要声称已发布到 crates.io。
 
 Division of labour inside `build.yml`:
 

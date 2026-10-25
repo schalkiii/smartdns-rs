@@ -78,7 +78,15 @@ jobs:
         uses: ./.github/actions/setup
 
       - name: Publish to crates.io
+        id: publish
         continue-on-error: true
         run: just publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      # 上一步带 continue-on-error，失败时 job 仍是绿的；不显式提示就会静默留下
+      # 「好像发到 crates.io 了」的错觉（git 依赖未发版，本步当前必然失败）。
+      - name: Surface crates.io publish failure
+        if: steps.publish.outcome == 'failure'
+        run: |
+          echo "::warning title=crates.io publish skipped::cargo publish 未成功（git 依赖无 crates.io 版本，或本仓库缺 CARGO_REGISTRY_TOKEN）。发行资产已发布，仅 crates.io 缺位。"
