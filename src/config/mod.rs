@@ -270,6 +270,11 @@ pub struct Config {
 
     pub nftsets: Vec<ConfigForDomain<Vec<ConfigForIP<NFTsetConfig>>>>,
 
+    /// nft set receiving addresses that fail the speed check
+    ///
+    /// nftset-no-speed [#4:inet#table#set|#6:inet#table#set|...]
+    pub nftset_no_speed: Option<Vec<ConfigForIP<NFTsetConfig>>>,
+
     /// set a timeout (ttl * 3) on nftset elements instead of leaving them permanent
     ///
     /// nftset-timeout [yes|no]

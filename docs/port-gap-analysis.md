@@ -15,7 +15,7 @@ xerj search --url http://127.0.0.1:9300 --prefix smartdns-c "<问题>"
 ## 1. 配置指令覆盖
 
 C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令；Rust 解析器
-（`src/config/parser/`）支持 127 个键。逐项比对后，**C 有而 Rust 无的共 37 个（已补齐 19 个；group-end 为提取误报，实际已支持；剩余 17 个）**：
+（`src/config/parser/`）支持 127 个键。逐项比对后，**C 有而 Rust 无的共 37 个（已补齐 20 个；group-end 为提取误报，实际已支持；剩余 16 个）**：
 
 | 分类 | 指令 | 影响 | 状态 |
 | :--- | :--- | :--- | :--- |
@@ -77,9 +77,9 @@ C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令�
 `dns_mw_cname::tests::test_strip_cname_records`（CNAME 裁剪）。
 `cargo test` 326 + 10 + 7 全绿，clippy 零告警，fmt 干净。
 
-## 6. 剩余优先级（滚动更新，当前 17 项）
+## 6. 剩余优先级（滚动更新，当前 16 项）
 
-2. `ipset` / `ipset-timeout` / `ipset-no-speed`、`nftset-no-speed`（防火墙集成）
+2. `ipset` / `ipset-timeout` / `ipset-no-speed`（防火墙集成）
 3. `acl-enable` / `ip-rules`（访问控制，需要先定配置语法）
 4. `log-syslog` / `audit-syslog`（syslog 后端）
 5. `bind-cert-generate` 等 4 项自签证书配置（需引入 rcgen）
@@ -154,7 +154,6 @@ C 版中 `group-match` 只是语法糖：`-d` 等价 `nameserver /domain/group`�
 
 | 指令 | 方案 | 阻塞点 |
 | :--- | :--- | :--- |
-| `nftset-no-speed` | 在测速路径记录每个 IP 的失败结果，失败者写入配置的 nft set | 现 `multi_mode_ping_fastest` 只返回最快 IP、不保留逐 IP 结果，需小改测速路径 |
 | `ipset` / `ipset-timeout` / `ipset-no-speed` | 新增 ipset 后端（netlink 或调用 `ipset` CLI），与 nftset 中间件对称 | 需要新的后端模块与 Linux 集成测试 |
 | `ip-rules` | 按客户端 CIDR 作用的上游过滤规则 | 现有 blacklist/ignore 是全局的，且过滤发生在无客户端上下文的上游解析层，需把客户端上下文传入 |
 | `acl-enable` | 客户端 ACL（拒绝/允许列表） | Rust 侧尚无 ACL 规则语法，需先设计配置格式 |
@@ -166,3 +165,11 @@ C 版中 `group-match` 只是语法糖：`-d` 等价 `nameserver /domain/group`�
 - `no-daemon` / `no-pidfile` / `restart-on-crash`：本实现从不 daemonize，进程管理与重启交给 systemd / Windows 服务。
 - `plugin`：C 版插件 ABI（`.so` 回调）不可移植到 Rust。
 - `ddns-domain`：独立 DDNS 功能，超出 DNS 解析器移植范围。
+
+## 16. 第十一批实现：nftset-no-speed
+
+- `nftset-no-speed <set 规格>`：在 nftset 中间件完成正常下发后，对本次应答的每个 IP 做一次
+  可达性探测（ICMP，2s 超时），不可达者写入配置的 set。仅在配置该指令时执行探测。
+- 与 C 版的差异：C 复用测速阶段的逐 IP 结果；Rust 现有 `ping_fastest` 只返回最快 IP，
+  不保留失败列表，因此这里单独探测（只在启用该指令时有开销），行为一致。
+测试：`test_parse_nftset_no_speed_list`、`test_parity_directives`；Linux 门控代码已做去门控类型检查。

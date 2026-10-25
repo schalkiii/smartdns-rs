@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### feat(nft): 支持 nftset-no-speed
+
+- 配置 `nftset-no-speed <set>` 后，应答中的 IP 会做一次可达性探测，不可达者写入该 set。
+- 只在启用该指令时探测；Linux + feature nft 下生效。
+测试：`test_parse_nftset_no_speed_list`、`test_parity_directives`；cargo test 336+10+7 全绿。
+
 ### feat(conf): 支持 group-match 组匹配语法糖
 
 `group-match -g <group> -d <domain> -c <cidr>` 翻译为既有的 `nameserver /domain/group`

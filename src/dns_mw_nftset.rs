@@ -37,9 +37,23 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsNftsetMidd
                         0
                     };
                     let debug = ctx.cfg().nftset_debug();
+                    let no_speed_sets = ctx.cfg().nftset_no_speed().map(|sets| sets.to_vec());
 
+                    let probe_addrs = ip_addrs.clone();
                     tokio::spawn(async move {
                         add_addrs(&nftsets, &ip_addrs, timeout, debug);
+
+                        // nftset-no-speed：测速失败（不可达）的地址写入指定 set
+                        if let Some(no_speed_sets) = no_speed_sets {
+                            use crate::infra::ping::{PingAddr, PingOptions, ping_fastest};
+
+                            for ip in probe_addrs {
+                                let opts = PingOptions::default().with_timeout_secs(2);
+                                if ping_fastest(vec![PingAddr::Icmp(ip)], opts).await.is_err() {
+                                    add_addrs(&no_speed_sets, &[ip], timeout, debug);
+                                }
+                            }
+                        }
                     });
                 }
             }

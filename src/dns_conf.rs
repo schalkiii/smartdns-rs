@@ -623,6 +623,12 @@ impl RuntimeConfig {
         self.odhcpd_lease_file.as_deref()
     }
 
+    /// nft set for addresses that fail the speed check
+    #[inline]
+    pub fn nftset_no_speed(&self) -> Option<&[ConfigForIP<NFTsetConfig>]> {
+        self.nftset_no_speed.as_deref()
+    }
+
     /// whether failed query packets are dumped to disk
     #[inline]
     pub fn debug_save_fail_packet(&self) -> bool {
@@ -1130,6 +1136,7 @@ impl RuntimeConfigBuilder {
                     }
                 }
                 DebugSaveFailPacket(v) => self.debug_save_fail_packet = Some(v),
+                NftsetNoSpeed(v) => self.nftset_no_speed = Some(v.0),
                 DebugSaveFailPacketDir(v) => {
                     self.debug_save_fail_packet_dir = Some(self.resolve_filepath(v))
                 }
@@ -2239,6 +2246,7 @@ mod tests {
             .with("cache-mem-size 1048576")
             .with("debug-save-fail-packet yes")
             .with("debug-save-fail-packet-dir /tmp/smartdns-debug")
+            .with("nftset-no-speed #4:inet#tab#nospeed")
             .build()
             .unwrap();
 
@@ -2275,7 +2283,9 @@ mod tests {
         assert!(!default.audit_console());
         assert_eq!(default.local_domain(), None);
         assert_eq!(default.cache_mem_size(), 0, "C 版默认不限制");
+        assert_eq!(cfg.nftset_no_speed().map(|s| s.len()), Some(1));
         assert!(!default.debug_save_fail_packet());
+        assert_eq!(default.nftset_no_speed(), None);
         assert_eq!(
             default.debug_save_fail_packet_dir(),
             PathBuf::from("/tmp/smartdns")

@@ -32,6 +32,20 @@ impl NomParser for NFTsetConfig {
     }
 }
 
+/// `nftset-no-speed` 的取值：一个或多个 set 规格（空格分隔）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NftSetList(pub Vec<ConfigForIP<NFTsetConfig>>);
+
+impl NomParser for NftSetList {
+    fn parse(input: &str) -> IResult<&str, Self> {
+        map(
+            separated_list1(space1, ConfigForIP::<NFTsetConfig>::parse),
+            NftSetList,
+        )
+        .parse(input)
+    }
+}
+
 impl NomParser for ConfigForIP<NFTsetConfig> {
     #[inline]
     fn parse(input: &str) -> IResult<&str, Self> {
@@ -140,5 +154,11 @@ mod tests {
             ConfigForIP::<NFTsetConfig>::parse("-").unwrap(),
             ("", ConfigForIP::None)
         );
+    }
+    #[test]
+    fn test_parse_nftset_no_speed_list() {
+        let (rest, parsed) = NftSetList::parse("#4:inet#tab#nospeed #6:ip6#tab#nospeed6").unwrap();
+        assert_eq!(rest, "");
+        assert_eq!(parsed.0.len(), 2);
     }
 }

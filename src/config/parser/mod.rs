@@ -131,6 +131,7 @@ pub enum ConfigItem {
     LocalDomain(LocalDomain),
     OdhcpdLeaseFile(PathBuf),
     GroupMatch(GroupMatch),
+    NftsetNoSpeed(nftset::NftSetList),
     DebugSaveFailPacket(bool),
     DebugSaveFailPacketDir(PathBuf),
     LogColor(bool),
@@ -238,6 +239,7 @@ impl std::fmt::Display for ConfigItem {
             ConfigItem::LocalDomain(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::OdhcpdLeaseFile(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::GroupMatch(_) => write!(f, "# unsupported config item: {:?}", self)?,
+            ConfigItem::NftsetNoSpeed(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::DebugSaveFailPacket(_) => {
                 write!(f, "# unsupported config item: {:?}", self)?
             }
@@ -449,6 +451,7 @@ fn parse_line<'a>(input: &'a str) -> IResult<&'a str, ConfigLine<'a>> {
         map(config("local-domain"), ConfigItem::LocalDomain),
         map(config("odhcpd-lease-file"), ConfigItem::OdhcpdLeaseFile),
         map(config("group-match"), ConfigItem::GroupMatch),
+        map(config("nftset-no-speed"), ConfigItem::NftsetNoSpeed),
         map(
             config("debug-save-fail-packet"),
             ConfigItem::DebugSaveFailPacket,
