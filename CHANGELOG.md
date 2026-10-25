@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+### docs: 记录配置静默忽略行为与瞬时 SERVFAIL 症状
+
+- `AGENTS.md` 新增「不认识的指令会被静默吞掉」：`RuntimeConfig::config()` 对未知键和非法取值不报错
+  （`dns_conf.rs` 的 `Ok((_, None)) => ()`），并给出 `usize` 类与 `Byte` 类数值键的后缀差异、
+  哪些写法属于空写，以及为什么不能用 `/api/config` 或「启动没报错」判断生效。
+- `AGENTS.md` 的 Linux 门控段落补上 `dns_mw_ipset`：模块声明无条件编译，但 ipset CLI 下发在
+  `#[cfg(target_os = "linux")]` 分支里，Windows 同样检不到。
+- `README.md` / `README_zh-CN.md` 故障排查新增 `no connections available` 小节：亚毫秒级失败的观测特征、
+  可排除的原因（不是上游组为空，也不是版本回归，v0.13.2 同配置同样复现），根因标注为未定位。
+- `README_zh-CN.md` 补齐英文版已有的「与 C 版配置对齐」特性条目，恢复两份 README 的内容一致。
+- `docs/port-gap-analysis.md` §22.7：`socket-buff-size` 补上「只接受纯整数，写 `512K` 被静默忽略」，
+  并去掉与 `cache-mem-size` 重复的 `Byte` 后缀说明。
+
 ### docs: 同步 C 版指令对齐结论与逐项启用建议
 
 - `docs/port-gap-analysis.md` 新增 §22：按主题给出全部补齐项的可粘贴写法、取值建议、平台/feature

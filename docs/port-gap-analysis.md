@@ -350,11 +350,10 @@ force-no-CNAME no                                 # 开启后应答裁掉 CNAME 
   要么写裸主机名，要么显式 `h3://`。
 - ⚠️ `srv-record` 的值顺序是 `<target>,<port>,<priority>,<weight>`，**不是** C 版的
   `priority weight port target`；写错顺序会得到可用的记录但优先级/端口全反。
-- `audit-size` / `log-size` 走 `Byte` 解析，支持 `128k`、`16m` 这类后缀；
-  `cache-mem-size` 是纯整数（字节），带后缀会解析失败。
-
-- `socket-buff-size` 在 bind 前设置，对 UDP/TCP/DoT/DoH/DoH3/DoQ 全部监听器生效；取值受内核
-  `net.core.rmem_max`/`wmem_max` 上限约束，超过会被静默截断到上限。
+- `socket-buff-size` 在 bind 前设置，对 UDP/TCP/DoT/DoH/DoH3/DoQ 全部监听器生效（7 个绑定点见
+  `src/server/mod.rs`）；Linux 上取值受 `net.core.rmem_max`/`wmem_max` 上限约束，超过会被静默截断。
+  ⚠️ 只接受**纯整数字节**：写成 `512K` 这类后缀会解析失败并被静默忽略，等于没配（本机部署原先就是这样）。
+  同样只接受纯整数的还有 `cache-mem-size`、`max-query-limit`；`log-size` / `audit-size` 走 `Byte`，可以带后缀。
 - `force-no-CNAME` 会破坏依赖 CNAME 链的客户端（部分 CDN 健康检查、`dnsmasq` 转发校验），
   默认关闭；只有确认下游只看地址时才开。
 

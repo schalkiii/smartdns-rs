@@ -108,7 +108,15 @@ Request → [dnsmasq] → [hosts] → [cache] → [zone] → [audit] → [addr] 
 ```bash
 # Install Rust (if not already installed)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
 
+⚠️ 本文其余命令都写 `just …`，但 `just` 不是所有人的机器上都装了（本机就没有）。
+没有 `just` 时用等价的原生命令，勿因此判定"环境坏了"：`just test` → `cargo test`、
+`just fmt` → `cargo fmt`、`just cleanliness` → `cargo fmt --check && cargo clippy --all-targets`、
+`just build` → `cargo build`。后台跑命令时也要读日志确认真实退出码——包装命令可能报 exit 0
+而日志里是 `command not found`。
+
+```bash
 # Clone repository
 git clone https://github.com/schalkiii/smartdns-rs.git
 cd smartdns-rs
@@ -207,6 +215,21 @@ dnsmasq-lease-file /var/lib/misc/dnsmasq.leases
 ```
 
 解析器支持的全部键可通过 `grep -oE 'config\("[^"]*"\)|tag_no_case\("[^"]*"\)' src/config/parser/*.rs | sort -u` 枚举。
+
+### ⚠️ 不认识的指令会被静默吞掉
+
+`RuntimeConfig::config()` 对**键不认识**或**取值解析不出来**的行既不报错也不告警：`parse_line` 的
+`alt` 里 `group`（已知键集合）失败后会落到末尾的 `map(space0, |_| EmptyLine)` 兜底，
+整行被当成空行返回 `Ok((_, None))`，而 `dns_conf.rs` 对该分支是 `=> ()`；
+只有 nom 结构错误才走 `error!("unknown conf…")`。后果：一行写错的配置在日志里毫无痕迹，
+看起来"配置生效了"其实没有。
+
+- 数值键分两类：`usize` 类只接受纯整数（`socket-buff-size`、`cache-mem-size`、`max-query-limit`），
+  写 `512K` 会被静默忽略；`Byte` 类才接受后缀（`log-size 16M`、`audit-size 4M`）。
+- C 版写法 `address-rule`、`-b`、`cache-negative`、`restart-on-crash` 不在键集里，属于空写。
+  唯一解析成功但不接线的是 `bind-cert-key-pass`（见 `docs/port-gap-analysis.md` §22.9）。
+- 别用「启动没报错」或 `/api/config` 判断配置是否生效：该接口只回 `server_name` 与 `conf_dir`。
+  可靠手段是逐条比对键集 + 用真实 DNS 报文断言外部行为，或看 `/api/nameservers`、`/api/stats`。
 
 ### Loading Configuration
 
@@ -353,9 +376,12 @@ cd docker && docker build -t smartdns .
 ### Linux-gated code
 
 `ffi::nftset` 与 `dns_mw_nftset` 只在 `target_os = "linux"` + feature `nft` 下编译，Windows 上的
-`cargo check` / `cargo test` **不会**检查它们。改动这部分时，推送前先把 `src/main.rs` 里
+`cargo check` / `cargo test` **不会**检查它们。`dns_mw_ipset` 的模块声明本身不带门控
+（`src/main.rs`），但 ipset CLI 下发路径在 `#[cfg(target_os = "linux")]` 分支里
+（`src/dns_mw_ipset.rs:47,85`），Windows 同样检不到。改动这两处时，推送前先把 `src/main.rs` 里
 `mod dns_mw_nftset;` 与 `src/ffi/mod.rs` 里 `mod nftset_sys;` / `pub mod nftset;` 的
-`#[cfg(all(feature = "nft", target_os = "linux"))]` 临时去掉，跑一次 `cargo check --bin smartdns`，
+`#[cfg(all(feature = "nft", target_os = "linux"))]` 临时去掉，并把 `dns_mw_ipset.rs` 的
+`#[cfg(target_os = "linux")]` 分支临时改成无条件，跑一次 `cargo check --bin smartdns`，
 确认通过后再恢复门控。否则只能等 Linux CI 报错（v0.13.4 的 nftset 改动就是这样漏掉的）。
 
 ---

@@ -117,6 +117,10 @@ SmartDNS-rs 🐋 一个是受 [C 语言版 SmartDNS](https://github.com/pymumu/s
 
   内置 Web 仪表盘，采用单页面标签页界面，支持实时监控和管理。提供系统概览（含热门域名/活跃客户端排行）、上游服务器检查（每台上游的 IP/端口/协议/安全性/状态/查询次数/成功率/平均耗时）、查询日志浏览（支持过滤）、缓存管理（搜索/刷新）和规则管理（地址/转发 CRUD）。
 
+- **与 C 版配置对齐**
+
+  C 版 SmartDNS 中适用于本架构的配置指令已全部实现并带测试（v0.13.5 完成普查）：`txt-record`、多值 `srv-record`、`cache-mem-size`、`max-query-limit`、`socket-buff-size`、`force-no-CNAME`、`local-domain`、`local-ptr-enable`、`odhcpd-lease-file`、`data-dir`、`log-color`、`log-syslog`、`audit-SOA` / `audit-console` / `audit-syslog`、`ipset*`、`nftset-*`、`ip-rules`、`acl-enable`、`group-match`、`server-http3`、`bind-cert-*` 自签证书家族、`debug-save-fail-packet*`。完整普查记录与逐项启用建议见 [docs/port-gap-analysis.md](docs/port-gap-analysis.md)。
+
 *说明：C 语言版的 [smartdns](https://github.com/pymumu/smartdns) 功能非常的不错，但由于其仅支持 **Linux**，而对 **MacOS、Windows** 只能通过 Docker 或 WSL 支持。因此，才想开发一个 rust 版的 SmartDNS，支持编译到 Windows、MacOS、Linux 以及 Android 的 Termux 环境运行，并与其配置兼容。*
 
 ---
@@ -360,6 +364,14 @@ sudo ./target/release/smartdns run -c ./etc/smartdns/smartdns.conf
 - **请求超时**：网络路径问题。尝试更换服务器或协议（如从 DoH 切换为普通 UDP）。
 
 使用 `log-level debug` 可查看详细的重试与错误信息。
+
+### 瞬时 SERVFAIL：`no connections available`
+
+**症状**：部分未缓存域名在几十微秒内就失败（如 `elapsed: 79.8µs`），日志为 `proto error: no connections available`，客户端收到 SERVFAIL，而其他域名正常解析。服务刚重启后更明显，因为缓存是冷的。
+
+**可以排除的原因**：不是上游组为空——那种路径会在 ERROR 级别打印 `no available nameserver found for <域名>`，出现本症状时日志里并没有它；也不是版本回归——同一台机器、同一份配置下 v0.13.2 同样复现（16 个未缓存真实域名实测：v0.13.5 成功 13 个，v0.13.2 成功 10 个）。
+
+**当前状态**：根因尚未定位。这个错误由本项目代码抛出而非 hickory：`ProtoErrorKind::NoConnections` 出现在 `src/dns_client.rs`（上游组为空的短路返回、以及并发 fan-out 的兜底分支）和 `src/dns_mw_ns.rs`（IP 策略回退时既无成功也无失败结果），而亚毫秒级耗时说明并没有完成任何一次上游往返。
 
 ## 致谢 !!!
 
