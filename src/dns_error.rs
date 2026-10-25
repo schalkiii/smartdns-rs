@@ -42,6 +42,15 @@ impl LookupError {
         matches!(self, Self::ResponseCode(resc) if resc.eq(&ResponseCode::NXDomain))
     }
 
+    /// 若错误本身携带 DNS 响应码（如 ACL 拒绝），返回该响应码。
+    #[inline]
+    pub fn response_code(&self) -> Option<ResponseCode> {
+        match self {
+            Self::ResponseCode(code) => Some(*code),
+            _ => None,
+        }
+    }
+
     #[inline]
     pub fn is_soa(&self) -> bool {
         if let Self::Proto(err) = self

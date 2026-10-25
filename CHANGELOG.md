@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### feat(conf): 支持 acl-enable 客户端白名单
+
+- 开启后未匹配任何 `client-rules` 的客户端返回 REFUSED（后台预取豁免）。
+- 错误处理保留携带的 DNS 响应码，不再统一覆盖为 ServFail。
+测试：`test_acl_refuses_unmatched_client`、`test_parity_directives`；cargo test 343+10+7 全绿。
+
 ### feat(firewall): 支持 ipset / ipset-timeout / ipset-no-speed
 
 - `ipset /domain/<set>`：应答 IP 通过 `ipset add ... -exist` 下发（Linux，调用 ipset CLI）。

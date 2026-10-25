@@ -215,6 +215,11 @@ pub struct Config {
     /// force-no-CNAME [yes|no]
     pub force_no_cname: Option<bool>,
 
+    /// refuse clients that do not match any client-rules entry
+    ///
+    /// acl-enable [yes|no]
+    pub acl_enable: Option<bool>,
+
     /// per-client-CIDR upstream filtering rules
     ///
     /// ip-rules [cidr] [-blacklist-ip|-whitelist-ip|-bogus-nxdomain|-ignore-ip]

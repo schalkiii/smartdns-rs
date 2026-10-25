@@ -74,6 +74,12 @@ impl DnsMiddlewareHandler {
 
         server_opts.rule_group = rule_group_name.map(|s| s.to_string());
 
+        // acl-enable：未匹配任何 client-rules 的客户端直接 REFUSED。
+        // 后台预取由内部发起、没有真实客户端地址，豁免。
+        if cfg.acl_enable() && server_opts.rule_group.is_none() && !server_opts.is_background {
+            return Err(crate::libdns::proto::op::ResponseCode::Refused.into());
+        }
+
         let mut ctx = DnsContext::new(req.query().name().borrow(), cfg, server_opts);
         self.host.execute(&mut ctx, req).await
     }
@@ -148,6 +154,43 @@ mod tests {
 
     use super::*;
     use crate::infra::middleware::*;
+
+    /// acl-enable：未匹配 client-rules 的客户端应被 REFUSED，匹配的客户端与后台预取不受影响。
+    #[tokio::test]
+    async fn test_acl_refuses_unmatched_client() {
+        use crate::dns_conf::RuntimeConfig;
+        use crate::libdns::Protocol;
+        use crate::libdns::proto::op::{Message, ResponseCode};
+        use std::net::SocketAddr;
+
+        let cfg = std::sync::Arc::new(
+            RuntimeConfig::builder()
+                .with("acl-enable yes")
+                .with("client-rules 192.168.1.0/24 -group office")
+                .build()
+                .unwrap(),
+        );
+        let handler = DnsMiddlewareBuilder::new().build(cfg);
+
+        let make_req = |src: &str| {
+            let mut message = Message::query();
+            message.add_query(Query::query("example.com".parse().unwrap(), RecordType::A));
+            DnsRequest::new(message, src.parse::<SocketAddr>().unwrap(), Protocol::Udp)
+        };
+
+        let err = handler
+            .search(&make_req("10.0.0.1:5353"), &Default::default())
+            .await
+            .unwrap_err();
+        assert_eq!(err.response_code(), Some(ResponseCode::Refused));
+
+        if let Err(err) = handler
+            .search(&make_req("192.168.1.5:5353"), &Default::default())
+            .await
+        {
+            assert_ne!(err.response_code(), Some(ResponseCode::Refused));
+        }
+    }
 
     pub struct DnsMockMiddleware {
         map: HashMap<Query, Result<DnsResponse, DnsError>>,

@@ -138,6 +138,7 @@ pub enum ConfigItem {
     IpSet(ConfigForDomain<IpSetName>),
     IpSetTimeoutEnable(bool),
     IpSetNoSpeed(String),
+    AclEnable(bool),
     BindCertGenerate(bool),
     BindCertRootKeyFile(PathBuf),
     BindCertSan(san_list::SanList),
@@ -258,6 +259,7 @@ impl std::fmt::Display for ConfigItem {
                 write!(f, "# unsupported config item: {:?}", self)?
             }
             ConfigItem::IpSetNoSpeed(_) => write!(f, "# unsupported config item: {:?}", self)?,
+            ConfigItem::AclEnable(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::BindCertGenerate(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::BindCertRootKeyFile(_) => {
                 write!(f, "# unsupported config item: {:?}", self)?
@@ -487,6 +489,7 @@ fn parse_line<'a>(input: &'a str) -> IResult<&'a str, ConfigLine<'a>> {
         map(config("ipset"), ConfigItem::IpSet),
         map(config("ipset-timeout"), ConfigItem::IpSetTimeoutEnable),
         map(config("ipset-no-speed"), ConfigItem::IpSetNoSpeed),
+        map(config("acl-enable"), ConfigItem::AclEnable),
         map(config("bind-cert-generate"), ConfigItem::BindCertGenerate),
         map(
             config("bind-cert-root-key-file"),

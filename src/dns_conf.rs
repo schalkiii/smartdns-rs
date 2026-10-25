@@ -697,6 +697,12 @@ impl RuntimeConfig {
         self.ipset_timeout_enable.unwrap_or_default()
     }
 
+    /// refuse clients that do not match any client-rules entry
+    #[inline]
+    pub fn acl_enable(&self) -> bool {
+        self.acl_enable.unwrap_or_default()
+    }
+
     /// ipset receiving addresses that fail the speed check
     #[inline]
     pub fn ipset_no_speed(&self) -> Option<&str> {
@@ -1230,6 +1236,7 @@ impl RuntimeConfigBuilder {
                 IpSet(v) => rule_group.ipsets.push(v),
                 IpSetTimeoutEnable(v) => self.ipset_timeout_enable = Some(v),
                 IpSetNoSpeed(v) => self.ipset_no_speed = Some(v),
+                AclEnable(v) => self.acl_enable = Some(v),
                 GroupMatch(v) => {
                     for domain in v.domains {
                         rule_group.forward_rules.push(crate::config::ForwardRule {
@@ -2372,6 +2379,7 @@ mod tests {
             .with("ipset /example.com/smartdns_v4")
             .with("ipset-timeout yes")
             .with("ipset-no-speed smartdns_nospeed")
+            .with("acl-enable yes")
             .build()
             .unwrap();
 
@@ -2418,6 +2426,7 @@ mod tests {
         assert!(cfg.log_config().syslog());
         assert!(cfg.audit_syslog());
         assert!(cfg.ipset_timeout_enable());
+        assert!(cfg.acl_enable());
         assert_eq!(cfg.ipset_no_speed(), Some("smartdns_nospeed"));
         assert_eq!(
             cfg.rule_groups().get("default").map(|g| g.ipsets.len()),
@@ -2431,6 +2440,7 @@ mod tests {
         assert!(!default.log_config().syslog());
         assert!(!default.audit_syslog());
         assert!(!default.ipset_timeout_enable());
+        assert!(!default.acl_enable());
         assert_eq!(default.ipset_no_speed(), None);
         assert_eq!(
             default.debug_save_fail_packet_dir(),

@@ -581,8 +581,17 @@ async fn process(
                                                 .set_response_code(ResponseCode::NXDomain);
                                         }
                                         let original = request.query().original();
+                                        let code = e.response_code();
+                                        if let Some(code) = code {
+                                            response_header.set_response_code(code);
+                                        }
                                         match e.as_soa(original) {
                                             Some(soa) => (soa, false),
+                                            None if code.is_some() => {
+                                                let mut res = DnsResponse::empty();
+                                                res.add_query(original.to_owned());
+                                                (res, false)
+                                            }
                                             None => {
                                                 log::warn!(
                                                     "[qid={}] {}failed: {} {} -> {}, {:?}",
