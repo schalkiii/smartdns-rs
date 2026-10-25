@@ -295,6 +295,16 @@ pub struct Config {
 
     pub nftsets: Vec<ConfigForDomain<Vec<ConfigForIP<NFTsetConfig>>>>,
 
+    /// enable timeout (ttl * 3) on ipset entries
+    ///
+    /// ipset-timeout [yes|no]
+    pub ipset_timeout_enable: Option<bool>,
+
+    /// ipset receiving addresses that fail the speed check
+    ///
+    /// ipset-no-speed [setname]
+    pub ipset_no_speed: Option<String>,
+
     /// nft set receiving addresses that fail the speed check
     ///
     /// nftset-no-speed [#4:inet#table#set|#6:inet#table#set|...]
@@ -485,6 +495,12 @@ pub enum HttpsRecordRule {
     },
     RecordData(HTTPS),
 }
+
+/// ipset 名称（`ipset /domain/name` 的配置值）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct IpSetName(pub String);
+
+pub type IpsetRules = Vec<ConfigForDomain<IpSetName>>;
 
 /// 按客户端 CIDR 生效的上游过滤规则。
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -25,6 +25,7 @@ mod iporset;
 // mod line;
 mod group_match;
 mod ip_rule;
+mod ipset_name;
 mod local_domain;
 mod log_level;
 mod nameserver;
@@ -134,6 +135,9 @@ pub enum ConfigItem {
     OdhcpdLeaseFile(PathBuf),
     GroupMatch(GroupMatch),
     IpRule(IpRule),
+    IpSet(ConfigForDomain<IpSetName>),
+    IpSetTimeoutEnable(bool),
+    IpSetNoSpeed(String),
     BindCertGenerate(bool),
     BindCertRootKeyFile(PathBuf),
     BindCertSan(san_list::SanList),
@@ -249,6 +253,11 @@ impl std::fmt::Display for ConfigItem {
             ConfigItem::OdhcpdLeaseFile(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::GroupMatch(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::IpRule(_) => write!(f, "# unsupported config item: {:?}", self)?,
+            ConfigItem::IpSet(_) => write!(f, "# unsupported config item: {:?}", self)?,
+            ConfigItem::IpSetTimeoutEnable(_) => {
+                write!(f, "# unsupported config item: {:?}", self)?
+            }
+            ConfigItem::IpSetNoSpeed(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::BindCertGenerate(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::BindCertRootKeyFile(_) => {
                 write!(f, "# unsupported config item: {:?}", self)?
@@ -475,6 +484,9 @@ fn parse_line<'a>(input: &'a str) -> IResult<&'a str, ConfigLine<'a>> {
     let group2c = alt((
         map(config("group-match"), ConfigItem::GroupMatch),
         map(config("ip-rules"), ConfigItem::IpRule),
+        map(config("ipset"), ConfigItem::IpSet),
+        map(config("ipset-timeout"), ConfigItem::IpSetTimeoutEnable),
+        map(config("ipset-no-speed"), ConfigItem::IpSetNoSpeed),
         map(config("bind-cert-generate"), ConfigItem::BindCertGenerate),
         map(
             config("bind-cert-root-key-file"),

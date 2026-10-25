@@ -691,6 +691,18 @@ impl RuntimeConfig {
         )
     }
 
+    /// whether ipset entries get a timeout of ttl * 3
+    #[inline]
+    pub fn ipset_timeout_enable(&self) -> bool {
+        self.ipset_timeout_enable.unwrap_or_default()
+    }
+
+    /// ipset receiving addresses that fail the speed check
+    #[inline]
+    pub fn ipset_no_speed(&self) -> Option<&str> {
+        self.ipset_no_speed.as_deref()
+    }
+
     /// nft set for addresses that fail the speed check
     #[inline]
     pub fn nftset_no_speed(&self) -> Option<&[ConfigForIP<NFTsetConfig>]> {
@@ -974,6 +986,7 @@ impl RuntimeConfigBuilder {
                 &rule_group.srv_records,
                 &rule_group.https_records,
                 &rule_group.txt_records,
+                &rule_group.ipsets,
                 &cfg.nftsets,
             );
             domain_rule_group_map.insert(group_name.to_string(), domain_rule_map);
@@ -1214,6 +1227,9 @@ impl RuntimeConfigBuilder {
                 LocalDomain(v) => self.local_domain = v.0,
                 OdhcpdLeaseFile(v) => self.odhcpd_lease_file = Some(self.resolve_filepath(v)),
                 IpRule(v) => self.ip_rules.push(v),
+                IpSet(v) => rule_group.ipsets.push(v),
+                IpSetTimeoutEnable(v) => self.ipset_timeout_enable = Some(v),
+                IpSetNoSpeed(v) => self.ipset_no_speed = Some(v),
                 GroupMatch(v) => {
                     for domain in v.domains {
                         rule_group.forward_rules.push(crate::config::ForwardRule {
@@ -2353,6 +2369,9 @@ mod tests {
             .with("bind-cert-validity-days 30")
             .with("log-syslog yes")
             .with("audit-syslog yes")
+            .with("ipset /example.com/smartdns_v4")
+            .with("ipset-timeout yes")
+            .with("ipset-no-speed smartdns_nospeed")
             .build()
             .unwrap();
 
@@ -2398,6 +2417,12 @@ mod tests {
         assert_eq!(cfg.bind_cert_validity_days(), Some(30));
         assert!(cfg.log_config().syslog());
         assert!(cfg.audit_syslog());
+        assert!(cfg.ipset_timeout_enable());
+        assert_eq!(cfg.ipset_no_speed(), Some("smartdns_nospeed"));
+        assert_eq!(
+            cfg.rule_groups().get("default").map(|g| g.ipsets.len()),
+            Some(1)
+        );
         assert!(!default.debug_save_fail_packet());
         assert_eq!(default.nftset_no_speed(), None);
         assert!(!default.bind_cert_generate());
@@ -2405,6 +2430,8 @@ mod tests {
         assert_eq!(default.bind_cert_validity_days(), None);
         assert!(!default.log_config().syslog());
         assert!(!default.audit_syslog());
+        assert!(!default.ipset_timeout_enable());
+        assert_eq!(default.ipset_no_speed(), None);
         assert_eq!(
             default.debug_save_fail_packet_dir(),
             PathBuf::from("/tmp/smartdns")

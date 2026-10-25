@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### feat(firewall): 支持 ipset / ipset-timeout / ipset-no-speed
+
+- `ipset /domain/<set>`：应答 IP 通过 `ipset add ... -exist` 下发（Linux，调用 ipset CLI）。
+- `ipset-timeout`：条目超时取 TTL*3；`ipset-no-speed`：探测不可达的 IP 写入指定 set。
+实现见 `src/dns_mw_ipset.rs`，与 nftset 中间件对称。
+测试：`test_build_add_args`、`test_parse`、`test_parity_directives`；cargo test 342+10+7 全绿。
+
 ### feat(conf): 支持 ip-rules 按客户端 CIDR 的过滤规则
 
 `ip-rules <cidr> [-blacklist-ip|-whitelist-ip|-bogus-nxdomain|-ignore-ip]`，可组合多个 flag。

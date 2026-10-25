@@ -15,7 +15,7 @@ xerj search --url http://127.0.0.1:9300 --prefix smartdns-c "<问题>"
 ## 1. 配置指令覆盖
 
 C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令；Rust 解析器
-（`src/config/parser/`）支持 127 个键。逐项比对后，**C 有而 Rust 无的共 37 个（已补齐 27 个；group-end 为提取误报，实际已支持；剩余 9 个）**：
+（`src/config/parser/`）支持 127 个键。逐项比对后，**C 有而 Rust 无的共 37 个（已补齐 30 个；group-end 为提取误报，实际已支持；剩余 6 个）**：
 
 | 分类 | 指令 | 影响 | 状态 |
 | :--- | :--- | :--- | :--- |
@@ -28,7 +28,7 @@ C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令�
 | 行为 | `force-no-CNAME` | 应答中去掉 CNAME 只留地址，`src/dns_server/address.c:195`、`answer.c:64` | **本次已实现** |
 | 行为 | `local-domain` | 本地域后缀走 mDNS 组 + hosts 条目后缀展开 | **本次已实现** |
 | PTR | `local-ptr-enable` | 用 hosts 回答本机地址的 PTR（Rust 已有 `LocalPtrZoneProvider`，缺开关） | **本次已实现** |
-| 防火墙 | `ipset` / `ipset-timeout` / `ipset-no-speed` | ipset 下发与超时 | 待实现（nft 已有部分能力） |
+| 防火墙 | `ipset` / `ipset-timeout` / `ipset-no-speed` | ipset 下发与超时 | **本次已实现（Linux 调用 ipset CLI）** |
 | 防火墙 | `nftset-timeout` / `nftset-debug` / `nftset-no-speed` | nftset 超时/调试 | `timeout`/`debug` **已实现**；`no-speed` 待实现 |
 | 日志 | `log-syslog` / `audit-syslog` | syslog 后端（unix） | **本次已实现** |
 | 日志 | `audit-SOA` / `audit-console` | SOA 应答也审计 / 审计同时打印到控制台 | **本次已实现** |
@@ -78,9 +78,8 @@ C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令�
 `dns_mw_cname::tests::test_strip_cname_records`（CNAME 裁剪）。
 `cargo test` 326 + 10 + 7 全绿，clippy 零告警，fmt 干净。
 
-## 6. 剩余优先级（滚动更新，当前 9 项）
+## 6. 剩余优先级（滚动更新，当前 6 项）
 
-2. `ipset` / `ipset-timeout` / `ipset-no-speed`（防火墙集成）
 3. `acl-enable` / `ip-rules`（访问控制，需要先定配置语法）
 4. `log-syslog` / `audit-syslog`（syslog 后端）
 7. 不移植：`plugin`、`ddns-domain`、`no-daemon` / `no-pidfile` / `restart-on-crash`
@@ -154,7 +153,6 @@ C 版中 `group-match` 只是语法糖：`-d` 等价 `nameserver /domain/group`�
 
 | 指令 | 方案 | 阻塞点 |
 | :--- | :--- | :--- |
-| `ipset` / `ipset-timeout` / `ipset-no-speed` | 新增 ipset 后端（netlink 或调用 `ipset` CLI），与 nftset 中间件对称 | 需要新的后端模块与 Linux 集成测试 |
 | `acl-enable` | 客户端 ACL（拒绝/允许列表） | Rust 侧尚无 ACL 规则语法，需先设计配置格式 |
 
 不移植（`not-applicable`）：
@@ -196,3 +194,14 @@ C 版中 `group-match` 只是语法糖：`-d` 等价 `nameserver /domain/group`�
   合并进本次请求的 ignore/blacklist/whitelist 集合（无匹配时零拷贝复用全局 `Arc`）；
   `dns_mw_bogus` 用 `ip_rule_bogus_set_for` 处理客户端级 `-bogus-nxdomain`。
 测试：`config::parser::ip_rule::tests::test_parse`、`dns_conf::tests::test_ip_rules_per_client`。
+
+## 20. 第十五批实现：ipset / ipset-timeout / ipset-no-speed
+
+- `ipset /domain/<set>`：域级规则，可多条累积；应答中的 A/AAAA 通过 `ipset add <set> <ip> -exist`
+  下发（Linux；非 Linux 为空操作）。
+- `ipset-timeout yes`：条目超时取答案 TTL * 3。
+- `ipset-no-speed <set>`：应答 IP 做可达性探测，不可达者写入该 set。
+实现：新增 `src/dns_mw_ipset.rs`（与 nftset 中间件对称，Linux 注册），`DomainRule.ipsets` 走
+RuleGroup → DomainRuleMap 链路。
+测试：`dns_mw_ipset::tests::test_build_add_args`、`config::parser::ipset_name::tests::test_parse`、
+`test_parity_directives`。

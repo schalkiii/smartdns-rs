@@ -785,6 +785,15 @@ fn build_middleware(
             builder = builder.with(DnsNftsetMiddleware);
         }
 
+        // ipset（Linux 通过 ipset CLI 下发）
+        #[cfg(target_os = "linux")]
+        if cfg.ipset_no_speed().is_some()
+            || cfg.rule_groups().values().any(|g| !g.ipsets.is_empty())
+        {
+            use crate::dns_mw_ipset::DnsIpsetMiddleware;
+            builder = builder.with(DnsIpsetMiddleware);
+        }
+
         // check if cache enabled.
         if cfg.cache_size() > 0 {
             let cache_middleware = DnsCacheMiddleware::new(cfg, dns_handle.clone());

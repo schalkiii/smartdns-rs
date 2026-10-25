@@ -30,6 +30,9 @@ pub struct DomainRule {
     pub no_serve_expired: Option<bool>,
     pub nftset: Option<Vec<ConfigForIP<NFTsetConfig>>>,
 
+    /// ipset names for this domain
+    pub ipsets: Option<Vec<String>>,
+
     pub rr_ttl: Option<u64>,
     pub rr_ttl_min: Option<u64>,
     pub rr_ttl_max: Option<u64>,
