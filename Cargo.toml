@@ -239,6 +239,8 @@ local-ip-address = "0.6.1"
 console = { version = "0.15.8", optional = true }
 rangemap = "1.5.1"
 mac-addr = "0.3.0"
+rcgen = { version = "0.14.10", features = ["pem"] }
+time = "0.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 uzers = { version = "0.12", default-features = false }

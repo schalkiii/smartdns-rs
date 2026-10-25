@@ -132,6 +132,26 @@ pub struct Config {
 
     pub cache: CacheConfig,
 
+    /// generate a self-signed certificate when no bind certificate is configured
+    ///
+    /// bind-cert-generate [yes|no]
+    pub bind_cert_generate: Option<bool>,
+
+    /// root CA private key (PEM) used to sign the generated certificate
+    ///
+    /// bind-cert-root-key-file [path]
+    pub bind_cert_root_key_file: Option<PathBuf>,
+
+    /// additional SANs for the generated certificate
+    ///
+    /// bind-cert-san [name|name,...]
+    pub bind_cert_san: Option<Vec<String>>,
+
+    /// validity of the generated certificate in days
+    ///
+    /// bind-cert-validity-days [num]
+    pub bind_cert_validity_days: Option<u64>,
+
     /// base directory for runtime data files (persisted cache)
     ///
     /// data-dir [path]

@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### feat(tls): 支持 bind-cert-generate 自签证书家族
+
+- `bind-cert-generate`：未配置证书时自动生成/复用自签证书（落在 data-dir）。
+- `bind-cert-san`：额外 SAN（自动带 localhost/127.0.0.1/::1）。
+- `bind-cert-validity-days`：证书有效期。
+- `bind-cert-root-key-file`：用 PEM 根密钥作为 CA 签发，否则自签。
+实现见 `src/rustls_self_signed.rs`（rcgen 0.14），接入 `create_cert_resolver`。
+测试：`test_generate_self_signed`、`test_parity_directives`；cargo test 338+10+7 全绿。
+
 ### feat(nft): 支持 nftset-no-speed
 
 - 配置 `nftset-no-speed <set>` 后，应答中的 IP 会做一次可达性探测，不可达者写入该 set。

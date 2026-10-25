@@ -15,7 +15,7 @@ xerj search --url http://127.0.0.1:9300 --prefix smartdns-c "<问题>"
 ## 1. 配置指令覆盖
 
 C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令；Rust 解析器
-（`src/config/parser/`）支持 127 个键。逐项比对后，**C 有而 Rust 无的共 37 个（已补齐 20 个；group-end 为提取误报，实际已支持；剩余 16 个）**：
+（`src/config/parser/`）支持 127 个键。逐项比对后，**C 有而 Rust 无的共 37 个（已补齐 24 个；group-end 为提取误报，实际已支持；剩余 12 个）**：
 
 | 分类 | 指令 | 影响 | 状态 |
 | :--- | :--- | :--- | :--- |
@@ -32,7 +32,7 @@ C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令�
 | 防火墙 | `nftset-timeout` / `nftset-debug` / `nftset-no-speed` | nftset 超时/调试 | `timeout`/`debug` **已实现**；`no-speed` 待实现 |
 | 日志 | `log-syslog` / `audit-syslog` / `audit-console` / `log-color` | 日志后端与着色 | 低优先级 |
 | 日志 | `audit-SOA` / `audit-console` | SOA 应答也审计 / 审计同时打印到控制台 | **本次已实现** |
-| 证书 | `bind-cert-generate` / `-root-key-file` / `-san` / `-validity-days` | 自签证书自动生成 | 低优先级（可用外部证书） |
+| 证书 | `bind-cert-generate` / `-root-key-file` / `-san` / `-validity-days` | 自签证书自动生成 | **本次已实现** |
 | 运维 | `no-daemon` / `no-pidfile` / `restart-on-crash` | 守护进程行为 | 不移植（交给 systemd/Windows 服务） |
 | 运维 | `data-dir` | 数据目录（相对 cache-file 按此解析） | **本次已实现** |
 | 运维 | `debug-save-fail-packet` / `-dir` | 失败请求报文落盘 | **本次已实现** |
@@ -77,12 +77,11 @@ C 版配置表（`src/dns_conf/dns_conf.c` 的 `CONF_*` 宏）共 114 个指令�
 `dns_mw_cname::tests::test_strip_cname_records`（CNAME 裁剪）。
 `cargo test` 326 + 10 + 7 全绿，clippy 零告警，fmt 干净。
 
-## 6. 剩余优先级（滚动更新，当前 16 项）
+## 6. 剩余优先级（滚动更新，当前 12 项）
 
 2. `ipset` / `ipset-timeout` / `ipset-no-speed`（防火墙集成）
 3. `acl-enable` / `ip-rules`（访问控制，需要先定配置语法）
 4. `log-syslog` / `audit-syslog`（syslog 后端）
-5. `bind-cert-generate` 等 4 项自签证书配置（需引入 rcgen）
 7. 不移植：`plugin`、`ddns-domain`、`no-daemon` / `no-pidfile` / `restart-on-crash`
 
 ## 7. 第三批实现：SRV 多值
@@ -158,7 +157,6 @@ C 版中 `group-match` 只是语法糖：`-d` 等价 `nameserver /domain/group`�
 | `ip-rules` | 按客户端 CIDR 作用的上游过滤规则 | 现有 blacklist/ignore 是全局的，且过滤发生在无客户端上下文的上游解析层，需把客户端上下文传入 |
 | `acl-enable` | 客户端 ACL（拒绝/允许列表） | Rust 侧尚无 ACL 规则语法，需先设计配置格式 |
 | `log-syslog` / `audit-syslog` | 增加 syslog writer（unix cfg） | 需引入 `syslog` 依赖，并接入 tracing MakeWriter |
-| `bind-cert-generate` / `-root-key-file` / `-san` / `-validity-days` | 用 rcgen 生成自签/由根密钥签发的证书 | 需引入 `rcgen` 依赖；root-key 签发需额外实现 |
 
 不移植（`not-applicable`）：
 
@@ -173,3 +171,13 @@ C 版中 `group-match` 只是语法糖：`-d` 等价 `nameserver /domain/group`�
 - 与 C 版的差异：C 复用测速阶段的逐 IP 结果；Rust 现有 `ping_fastest` 只返回最快 IP，
   不保留失败列表，因此这里单独探测（只在启用该指令时有开销），行为一致。
 测试：`test_parse_nftset_no_speed_list`、`test_parity_directives`；Linux 门控代码已做去门控类型检查。
+
+## 17. 第十二批实现：bind-cert-generate 家族
+
+- `bind-cert-generate yes`：未配置证书的 TLS/DoH/DoQ/DoH3 监听在启动时生成（或复用）
+  自签证书，落在 `data-dir`（未配置时临时目录），文件名固定。
+- `bind-cert-san`：逗号分隔的额外 SAN，自动附带 `localhost` / `127.0.0.1` / `::1`。
+- `bind-cert-validity-days`：生成证书的有效期（`not_before=now`）。
+- `bind-cert-root-key-file`：用该 PEM 密钥作为 CA 签发；未配置则自签。
+实现：新增 `src/rustls_self_signed.rs`（rcgen 0.14），接入 `server::create_cert_resolver`。
+测试：`rustls_self_signed::tests::test_generate_self_signed`、`test_parity_directives`。

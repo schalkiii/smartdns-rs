@@ -43,6 +43,7 @@ mod proxy;
 #[cfg(feature = "resolve-cli")]
 mod resolver;
 mod rustls;
+mod rustls_self_signed;
 mod server;
 #[cfg(feature = "service")]
 mod service;

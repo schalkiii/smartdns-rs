@@ -52,22 +52,37 @@ pub fn serve(
     let socket_buff_size = cfg.socket_buff_size();
 
     fn create_cert_resolver(
+        cfg: &RuntimeConfig,
         ssl_config: &SslConfig,
         certificate_file: Option<&Path>,
         certificate_key_file: Option<&Path>,
         typ: &'static str,
     ) -> Result<Arc<TlsServerCertResolver>, crate::Error> {
-        let certificate_file = ssl_config
-            .certificate
-            .as_deref()
-            .or(certificate_file)
-            .ok_or(crate::Error::CertificatePathNotDefined(typ))?;
-        let certificate_key_file = ssl_config
+        let configured_cert = ssl_config.certificate.as_deref().or(certificate_file);
+        let configured_key = ssl_config
             .certificate_key
             .as_deref()
-            .or(certificate_key_file)
+            .or(certificate_key_file);
+
+        // bind-cert-generate：未配置证书时生成（或复用）自签证书
+        let generated = if (configured_cert.is_none() || configured_key.is_none())
+            && cfg.bind_cert_generate()
+        {
+            Some(crate::rustls_self_signed::generate(cfg)?)
+        } else {
+            None
+        };
+
+        let certificate_file = configured_cert
+            .map(Path::to_path_buf)
+            .or_else(|| generated.as_ref().map(|(cert, _)| cert.clone()))
+            .ok_or(crate::Error::CertificatePathNotDefined(typ))?;
+        let certificate_key_file = configured_key
+            .map(Path::to_path_buf)
+            .or_else(|| generated.as_ref().map(|(_, key)| key.clone()))
             .ok_or(crate::Error::CertificateKeyPathNotDefined(typ))?;
-        let resolver = TlsServerCertResolver::new(certificate_file, certificate_key_file)?;
+
+        let resolver = TlsServerCertResolver::new(&certificate_file, &certificate_key_file)?;
         Ok(Arc::new(resolver))
     }
 
@@ -96,6 +111,7 @@ pub fn serve(
             let ssl_config = &bind_addr_config.ssl_config;
 
             let server_cert_resolver = create_cert_resolver(
+                cfg,
                 ssl_config,
                 certificate_file,
                 certificate_key_file,
@@ -136,6 +152,7 @@ pub fn serve(
             let ssl_config = &bind_addr_config.ssl_config;
 
             let server_cert_resolver = create_cert_resolver(
+                cfg,
                 ssl_config,
                 certificate_file,
                 certificate_key_file,
@@ -165,6 +182,7 @@ pub fn serve(
             let ssl_config = &bind_addr_config.ssl_config;
 
             let server_cert_resolver = create_cert_resolver(
+                cfg,
                 ssl_config,
                 certificate_file,
                 certificate_key_file,
@@ -187,6 +205,7 @@ pub fn serve(
             let ssl_config = &bind_addr_config.ssl_config;
 
             let server_cert_resolver = create_cert_resolver(
+                cfg,
                 ssl_config,
                 certificate_file,
                 certificate_key_file,

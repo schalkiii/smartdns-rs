@@ -629,6 +629,30 @@ impl RuntimeConfig {
         self.nftset_no_speed.as_deref()
     }
 
+    /// whether a self-signed certificate is generated when none is configured
+    #[inline]
+    pub fn bind_cert_generate(&self) -> bool {
+        self.bind_cert_generate.unwrap_or_default()
+    }
+
+    /// root CA key used to sign the generated certificate
+    #[inline]
+    pub fn bind_cert_root_key_file(&self) -> Option<&Path> {
+        self.bind_cert_root_key_file.as_deref()
+    }
+
+    /// extra SANs for the generated certificate
+    #[inline]
+    pub fn bind_cert_san(&self) -> &[String] {
+        self.bind_cert_san.as_deref().unwrap_or_default()
+    }
+
+    /// validity of the generated certificate in days
+    #[inline]
+    pub fn bind_cert_validity_days(&self) -> Option<u64> {
+        self.bind_cert_validity_days
+    }
+
     /// whether failed query packets are dumped to disk
     #[inline]
     pub fn debug_save_fail_packet(&self) -> bool {
@@ -1136,6 +1160,12 @@ impl RuntimeConfigBuilder {
                     }
                 }
                 DebugSaveFailPacket(v) => self.debug_save_fail_packet = Some(v),
+                BindCertGenerate(v) => self.bind_cert_generate = Some(v),
+                BindCertRootKeyFile(v) => {
+                    self.bind_cert_root_key_file = Some(self.resolve_filepath(v))
+                }
+                BindCertSan(v) => self.bind_cert_san = Some(v.0),
+                BindCertValidityDays(v) => self.bind_cert_validity_days = Some(v),
                 NftsetNoSpeed(v) => self.nftset_no_speed = Some(v.0),
                 DebugSaveFailPacketDir(v) => {
                     self.debug_save_fail_packet_dir = Some(self.resolve_filepath(v))
@@ -2247,6 +2277,9 @@ mod tests {
             .with("debug-save-fail-packet yes")
             .with("debug-save-fail-packet-dir /tmp/smartdns-debug")
             .with("nftset-no-speed #4:inet#tab#nospeed")
+            .with("bind-cert-generate yes")
+            .with("bind-cert-san dns.example.com,1.2.3.4")
+            .with("bind-cert-validity-days 30")
             .build()
             .unwrap();
 
@@ -2284,8 +2317,17 @@ mod tests {
         assert_eq!(default.local_domain(), None);
         assert_eq!(default.cache_mem_size(), 0, "C 版默认不限制");
         assert_eq!(cfg.nftset_no_speed().map(|s| s.len()), Some(1));
+        assert!(cfg.bind_cert_generate());
+        assert_eq!(
+            cfg.bind_cert_san(),
+            &["dns.example.com".to_string(), "1.2.3.4".to_string()]
+        );
+        assert_eq!(cfg.bind_cert_validity_days(), Some(30));
         assert!(!default.debug_save_fail_packet());
         assert_eq!(default.nftset_no_speed(), None);
+        assert!(!default.bind_cert_generate());
+        assert!(default.bind_cert_san().is_empty());
+        assert_eq!(default.bind_cert_validity_days(), None);
         assert_eq!(
             default.debug_save_fail_packet_dir(),
             PathBuf::from("/tmp/smartdns")
