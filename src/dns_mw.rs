@@ -304,7 +304,6 @@ mod tests {
                 Ok(name) => name,
                 Err(err) => panic!("invalid Name {err}"),
             };
-
             let query = Query::query(name, record_type);
 
             self.map.insert(
@@ -371,6 +370,48 @@ mod tests {
         let err = res.unwrap_err();
 
         assert!(err.is_soa());
+    }
+
+    /// 链路集成：cname 规则把查询改写到 target 后，内层 address 规则命中并覆盖上游地址，
+    /// 应答最前面插回 CNAME 记录。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_cname_rule_then_address_rule_chain() {
+        use crate::dns_mw_addr::AddressMiddleware;
+        use crate::dns_mw_cname::DnsCNameMiddleware;
+
+        let cfg = RuntimeConfig::builder()
+            .with("cname /www.example.com/target.example.com")
+            .with("address /target.example.com/192.0.2.9")
+            .build()
+            .unwrap();
+
+        let mock = DnsMockMiddleware::mock(DnsCNameMiddleware)
+            .with_extra_middleware(AddressMiddleware)
+            .with_a_record("target.example.com.", "198.51.100.7".parse().unwrap())
+            .build(cfg);
+
+        let res = mock.lookup("www.example.com", RecordType::A).await.unwrap();
+
+        let cname = res
+            .answers()
+            .iter()
+            .find(|r| r.record_type() == RecordType::CNAME)
+            .expect("答案里应有 CNAME");
+        assert_eq!(
+            cname.data().as_cname().unwrap().0.to_utf8(),
+            "target.example.com."
+        );
+
+        let a = res
+            .answers()
+            .iter()
+            .find(|r| r.record_type() == RecordType::A)
+            .expect("答案里应有 A");
+        assert_eq!(
+            a.data().as_a().unwrap().0,
+            "192.0.2.9".parse::<Ipv4Addr>().unwrap(),
+            "address 规则应覆盖上游返回的 198.51.100.7"
+        );
     }
 
     /// bogus-nxdomain：命中黑名单的地址整条应答转为 NXDOMAIN，未命中的照常返回。

@@ -2,7 +2,7 @@
 
 生成方式（可复现）：遍历 `src/**/*.rs`，统计 `#[test]` / `#[tokio::test]` 数量与行数（见文末命令）。
 当前基线：`src` 167 文件 / 33 754 行 / **370 个单元测试（正则计数，含 feature 门控模块）**；`tests/` 3 文件 18 个集成用例；
-`cargo test --features=disable_icmp_ping` = **354 + 10 + 7** 全绿。
+`cargo test --features=disable_icmp_ping` = **355 + 10 + 7** 全绿。
 
 ## 1. 按目录汇总
 
@@ -31,7 +31,7 @@
 | G2 | `src/server/*` 监听器只覆盖了 socket 绑定层 | `net.rs` 已补 2 例（临时端口绑定成功、端口占用返回 Err 而非 panic）；TLS/HTTP/QUIC 监听循环仍未测 | 握手超时、协议循环等路径只能人工联调 | 各协议监听需临时端口 + 真实报文；TLS 用已有自签证书生成器做夹具 |
 | G3 | 并发门只有纯判定覆盖 | `should_refuse_query` 4 例；真实链路（含 `active_queries` 归还）未测 | 归还逻辑写错会永久降级并发 | 需要完整 `App` 装配；或在 dispatch 层抽成不依赖 socket 的 `run_once(requests) -> 响应列表` |
 | G4 | 双栈优选无法注入延迟 | 判定层已全覆盖（`is_that_faster` 4 例 + `decide_that_faster` 4 例，含「一方/双方无结果」）；只剩 `multi_mode_ping_fastest` 的 ICMP 采样与超时循环依赖真实网络 | 判定无回归网缺口；真实延迟采样仍只能线上观察 | 若需覆盖采样层，把 `ping_fastest` 改成注入式（小幅架构改动） |
-| G5 | 跨中间件链路无端到端用例 | `tests/` 仅 18 例，且无「cname 改写 → 下游规则命中」这类组合 | 链序/上下文传递错误难发现 | 见 §4 的阻塞记录：`DnsMockMiddleware` 与 cname 改写的 continuation 交互未定位 |
+| G5 | 跨中间件链路端到端 | 已补「cname 改写 → address 规则命中」用例（`test_cname_rule_then_address_rule_chain`）；其余组合（cache/dualstack/ns）仍无 | 链序/上下文传递错误可被发现 | 其余组合需要 cache/ns 的依赖注入，属后续架构改造 |
 | G6 | `src/zone` / `zone/providers` 基本无测试 | 7 文件 / 531 行 / 2 用例 | 静态记录、local-ptr、hosts 展开的边界未覆盖 | 可直接用 `ZoneProvider` 纯函数测，无需网络 |
 | G7 | `src/ffi`（nftset）无测试 | 3 文件 / 115 行 / 0 用例，且只在 Linux+nft 编译 | Windows 本地检不到（见 AGENTS.md 的 Linux 门控段） | 只能在 Linux CI 或临时去门控验证 |
 
@@ -48,13 +48,11 @@
 
 ## 4. 已知阻塞（附证据，避免重复踩）
 
-1. **cname 改写后的 mock 链路**：用例「cname 规则 → address 规则」始终返回
-   `NoRecordsFound(target.example.com)`；同一链上**直查 target 能命中 mock**（已用断言确认），
-   说明 rewrite 之后的 `next.run` 没有落到 mock 上。需要先给 `DnsMiddlewareHost` 加链路追踪
-   （记录每层 middleware 名）再定位，不能靠猜。
-2. **`DnsMockMiddleware` 的匹配键**：以 `query().original()` 取值；`with_cname` 会整体替换查询，
-   因此理论上 original 也变成新名——与上一条的表现矛盾，同样需要追踪先定位。
-3. **zone 身份查询**：`DnsMockMiddleware::mock(DnsZoneMiddleware::new())` 查 TXT `server-name`
+1. **已解决（2026-10-26）**：cname 改写链路此前失败，根因有两处，均非产品缺陷——
+   ① 夹具用相对名（`target.example.com`）建键，而规则改写后的查询名是 FQDN（带根点），hickory 的
+   `Query` 相等比较区分两者；② 当时的测试链序写成 address 在外、cname 在内，与生产
+   （`app.rs`：cname 先注册、addr 后注册）相反。修法：用例里给 mock 记录写全限定名，并按生产顺序组装。
+2. **`ServeState` 构造成本**3. **zone 身份查询**：`DnsMockMiddleware::mock(DnsZoneMiddleware::new())` 查 TXT `server-name`
    （带/不带尾点都试过）返回 `NoRecordsFound`；身份 provider 的匹配分支（`identity.rs:104`）
    没有被触发，怀疑与 `search()` 构造的 ctx/查询名规范化有关，需要在 provider 入口加日志再定位。
 4. **`ServeState` 构造成本**：`src/api` 的路由测试需要一个可用的 `DnsClientHandle`；

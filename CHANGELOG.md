@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### test: 解锁并补上 cname 改写 → address 规则链路用例
+
+- 定位到此前失败的两个根因，均非产品缺陷：夹具用相对名建键（规则改写后为 FQDN，hickory 区分二者）、
+  测试链序与生产相反（生产是 cname 在外、addr 在内）。
+- 用例按生产顺序组装，断言答案含 CNAME 记录且 address 规则覆盖上游地址；mock 记录改用全限定名。
+- 测试总量 355 + 10 + 7。
+
 ### test: 双栈切换判定补齐「无结果」分支
 
 - 从 `which_faster` 抽出纯函数 `decide_that_faster(this, that, threshold)`：对方无结果不切换、
