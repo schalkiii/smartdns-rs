@@ -4,6 +4,25 @@
 
 ## [Unreleased]
 
+### fix(dns): 校验 ECS 前缀，伪造前缀不再触发请求任务 panic
+
+hickory 的 `EcsOption` 解析把 `source_prefix` 当裸 `u8` 读入、不做范围校验，客户端可以给出
+> 32（v4）/ > 128（v6）的值；原实现直接 `Ipv4Net::new(..).unwrap()`，会 panic 掉该请求任务。
+现改为经 `ipnet_from_subnet` 返回 `Option`，非法前缀按「未携带 ECS」处理、回落客户端源 IP。
+新增 3 个单测：合法 v4/v6、非法 33/129、IPv4-mapped IPv6。
+
+### fix(infra): 缓存持久化写锁中毒不再连锁 panic
+
+`src/infra/mapped_file.rs` 的 `Mutex::lock().unwrap()` 改为 `unwrap_or_else(|e| e.into_inner())`，
+写线程 panic 后后续 checkpoint 仍能继续（与 `dns_client.rs` 既有的毒性恢复写法一致）。
+
+### docs: 新增 v0.13.5 代码审计报告，并补齐接口安全说明
+
+- `docs/AUDIT-REPORT-2026-10-25.md`：七维排查（文档一致性/缺漏、架构、代码写法、测试覆盖与严谨性、工程规范）
+  + 问题清单 + 逐条建议 + 优先级与并行性，末尾附处置状态表；含「未做穷尽逐函数比对」的覆盖声明。
+- 两份 README：Web UI 段落补出可写接口清单（缓存清空、配置重载、address 增删改）与「置于反代+认证之后」的
+  建议；预取批量/间隔的表述校正为环境变量 `PREFETCH_MAX_BATCH` / `PREFETCH_MIN_INTERVAL`（不是 conf 选项）。
+
 ### docs: 记录配置静默忽略行为与瞬时 SERVFAIL 症状
 
 - `AGENTS.md` 新增「不认识的指令会被静默吞掉」：`RuntimeConfig::config()` 对未知键和非法取值不报错

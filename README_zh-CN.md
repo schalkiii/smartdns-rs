@@ -107,7 +107,7 @@ SmartDNS-rs 🐋 一个是受 [C 语言版 SmartDNS](https://github.com/pymumu/s
 
 - **缓存预取优化**
 
-  智能缓存预取功能支持可配置的批量限制（默认 5 个域名）、预取之间的最小间隔（默认 500ms），以及失败请求的指数退避机制，防止资源耗尽。
+  智能缓存预取支持失败请求的指数退避，防止资源耗尽。批量上限（`PREFETCH_MAX_BATCH`，默认 5 个域名）与最小间隔（`PREFETCH_MIN_INTERVAL`，默认 500ms）是**环境变量**，不是配置文件选项；扫描器每轮最多取 16 条候选。
 
 - **后台任务队列**
 
@@ -292,6 +292,9 @@ SmartDNS-rs 内嵌 Web 仪表盘，可通过 HTTP 访问。它以单页面标签
 
    随包附带的默认配置已在回环地址上启用（`bind-http 127.0.0.1:8080`）。下面这种写法会监听所有网卡——
    管理面板没有鉴权，请仅在可信网络中这样配置。
+
+   同一监听器还暴露可写接口：`POST /api/caches/flush`、`POST /api/config/reload`，以及
+   `POST`/`PUT`/`DELETE /api/addresses`。确实需要跨网访问时，请放在反向代理之后并自行加认证。
 
    ```conf
    bind-http :8080

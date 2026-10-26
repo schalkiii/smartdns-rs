@@ -105,7 +105,7 @@ This repository is a production-hardened fork of [mokeyish/smartdns-rs](https://
 
 - **Cache Prefetch Optimization**
 
-  Intelligent cache prefetching with configurable batch limits (default 5 domains), minimum interval between prefetches (default 500ms), and exponential backoff for failed requests to prevent resource exhaustion.
+  Intelligent cache prefetching with exponential backoff for failed requests to prevent resource exhaustion. The batch limit (`PREFETCH_MAX_BATCH`, default 5 domains) and the minimum interval (`PREFETCH_MIN_INTERVAL`, default 500 ms) are **environment variables**, not config-file options — the scanner also caps each pass at 16 candidates.
 
 - **Background Task Queue**
 
@@ -292,6 +292,10 @@ SmartDNS-rs includes an embedded web dashboard accessible over HTTP. It provides
    The shipped default already enables it on loopback only (`bind-http 127.0.0.1:8080`).
    Use the form below to listen on every interface — the dashboard has no authentication, so
    only do this on a network you control.
+
+   The same listener also exposes mutating endpoints: `POST /api/caches/flush`,
+   `POST /api/config/reload`, and `POST`/`PUT`/`DELETE /api/addresses`. If you need it beyond
+   loopback, put it behind a reverse proxy that adds authentication.
 
    ```conf
    bind-http :8080
