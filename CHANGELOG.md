@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### test: 双栈切换判定补齐「无结果」分支
+
+- 从 `which_faster` 抽出纯函数 `decide_that_faster(this, that, threshold)`：对方无结果不切换、
+  本族无结果且对方有则切换、双方都有结果时才比较阈值；补 4 条边界用例。
+- 判定层至此全覆盖（`is_that_faster` 4 例 + `decide_that_faster` 4 例）；仅剩 ICMP 采样与超时循环
+  依赖真实网络，已在 `docs/TEST-MATRIX.md` G4 记录。
+- 测试总量 354 + 10 + 7。
+
 ### test: 补 server socket 绑定用例
 
 - `server::net` 新增 2 例：端口 0 时 UDP/TCP 均绑定成功（含 `socket-buff-size` 路径）、

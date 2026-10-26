@@ -158,11 +158,11 @@ async fn which_faster(
     let which_faster = select(this_ping, that_ping).await;
 
     let that_faster = match which_faster {
-        Either::Right((Some((_, that_dura)), this_ping)) => match this_ping.await {
-            Some((_, this_dura)) => is_that_faster(this_dura, that_dura, selection_threshold),
-            None => true,
-        },
-        _ => false,
+        Either::Right((that_res, this_ping)) => {
+            let this_dura = this_ping.await.map(|(_, d)| d);
+            decide_that_faster(this_dura, that_res.map(|(_, d)| d), selection_threshold)
+        }
+        Either::Left(_) => false,
     };
 
     if that_faster {
@@ -216,9 +216,22 @@ fn is_that_faster(this_dura: Duration, that_dura: Duration, threshold: Duration)
     this_dura > that_dura && (this_dura - that_dura) > threshold
 }
 
+/// 结合两族的测速结果给出最终判定：对方没测出结果就不切换；本族没结果、对方有则切换。
+fn decide_that_faster(
+    this_dura: Option<Duration>,
+    that_dura: Option<Duration>,
+    threshold: Duration,
+) -> bool {
+    match (this_dura, that_dura) {
+        (_, None) => false,
+        (None, Some(_)) => true,
+        (Some(this_dura), Some(that_dura)) => is_that_faster(this_dura, that_dura, threshold),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::is_that_faster;
+    use super::{decide_that_faster, is_that_faster};
     use std::time::Duration;
 
     #[test]
@@ -236,6 +249,28 @@ mod tests {
         assert!(
             !is_that_faster(ms(60), ms(50), ms(20)),
             "差值小于阈值不切换"
+        );
+    }
+
+    /// 两族测速结果合并判定：含「对方无结果」「本族无结果」两类边界。
+    #[test]
+    fn test_decide_that_faster() {
+        let ms = Duration::from_millis;
+        assert!(
+            decide_that_faster(Some(ms(100)), Some(ms(50)), ms(20)),
+            "对方更快且超过阈值"
+        );
+        assert!(
+            decide_that_faster(None, Some(ms(50)), ms(20)),
+            "本族无结果、对方有"
+        );
+        assert!(
+            !decide_that_faster(Some(ms(50)), None, ms(20)),
+            "对方无结果不切换"
+        );
+        assert!(
+            !decide_that_faster(None, None, ms(20)),
+            "双方都无结果不切换"
         );
     }
 }

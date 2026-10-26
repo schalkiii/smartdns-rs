@@ -2,7 +2,7 @@
 
 生成方式（可复现）：遍历 `src/**/*.rs`，统计 `#[test]` / `#[tokio::test]` 数量与行数（见文末命令）。
 当前基线：`src` 167 文件 / 33 754 行 / **370 个单元测试（正则计数，含 feature 门控模块）**；`tests/` 3 文件 18 个集成用例；
-`cargo test --features=disable_icmp_ping` = **353 + 10 + 7** 全绿。
+`cargo test --features=disable_icmp_ping` = **354 + 10 + 7** 全绿。
 
 ## 1. 按目录汇总
 
@@ -30,7 +30,7 @@
 | G1 | `src/api/*` 全部无测试 | 15 文件 / 1 361 行 / 0 用例，含 4 个写接口（清缓存、重载配置、address 增删改） | 接口语义/序列化/错误码变化无回归网 | 需要能构造 `ServeState`（依赖 `DnsClientHandle`）；建议先抽一个只依赖 `Arc<RuntimeConfig>` 的路由层 |
 | G2 | `src/server/*` 监听器只覆盖了 socket 绑定层 | `net.rs` 已补 2 例（临时端口绑定成功、端口占用返回 Err 而非 panic）；TLS/HTTP/QUIC 监听循环仍未测 | 握手超时、协议循环等路径只能人工联调 | 各协议监听需临时端口 + 真实报文；TLS 用已有自签证书生成器做夹具 |
 | G3 | 并发门只有纯判定覆盖 | `should_refuse_query` 4 例；真实链路（含 `active_queries` 归还）未测 | 归还逻辑写错会永久降级并发 | 需要完整 `App` 装配；或在 dispatch 层抽成不依赖 socket 的 `run_once(requests) -> 响应列表` |
-| G4 | 双栈优选无法注入延迟 | 判据 `is_that_faster` 4 例；`which_faster`/`multi_mode_ping_fastest` 依赖真实 ICMP | 优选策略回归只能线上观察 | 把 `ping_fastest` 调用改成注入式（`fn` 指针或 trait），属小幅架构改动 |
+| G4 | 双栈优选无法注入延迟 | 判定层已全覆盖（`is_that_faster` 4 例 + `decide_that_faster` 4 例，含「一方/双方无结果」）；只剩 `multi_mode_ping_fastest` 的 ICMP 采样与超时循环依赖真实网络 | 判定无回归网缺口；真实延迟采样仍只能线上观察 | 若需覆盖采样层，把 `ping_fastest` 改成注入式（小幅架构改动） |
 | G5 | 跨中间件链路无端到端用例 | `tests/` 仅 18 例，且无「cname 改写 → 下游规则命中」这类组合 | 链序/上下文传递错误难发现 | 见 §4 的阻塞记录：`DnsMockMiddleware` 与 cname 改写的 continuation 交互未定位 |
 | G6 | `src/zone` / `zone/providers` 基本无测试 | 7 文件 / 531 行 / 2 用例 | 静态记录、local-ptr、hosts 展开的边界未覆盖 | 可直接用 `ZoneProvider` 纯函数测，无需网络 |
 | G7 | `src/ffi`（nftset）无测试 | 3 文件 / 115 行 / 0 用例，且只在 Linux+nft 编译 | Windows 本地检不到（见 AGENTS.md 的 Linux 门控段） | 只能在 Linux CI 或临时去门控验证 |
