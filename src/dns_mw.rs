@@ -373,6 +373,37 @@ mod tests {
         assert!(err.is_soa());
     }
 
+    /// bogus-nxdomain：命中黑名单的地址整条应答转为 NXDOMAIN，未命中的照常返回。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_bogus_nxdomain_filters_mocked_ip() {
+        use crate::dns_mw_bogus::DnsBogusMiddleware;
+        use crate::libdns::proto::op::ResponseCode;
+
+        let cfg = std::sync::Arc::new(
+            RuntimeConfig::builder()
+                .with("bogus-nxdomain 203.0.113.7")
+                .build()
+                .unwrap(),
+        );
+
+        let mock = DnsMockMiddleware::mock(DnsBogusMiddleware)
+            .with_a_record("bogus.example.com", "203.0.113.7".parse().unwrap())
+            .build(cfg.clone());
+
+        let err = mock
+            .lookup("bogus.example.com", RecordType::A)
+            .await
+            .unwrap_err();
+        assert_eq!(err.response_code(), Some(ResponseCode::NXDomain));
+
+        let mock = DnsMockMiddleware::mock(DnsBogusMiddleware)
+            .with_a_record("ok.example.com", "198.51.100.7".parse().unwrap())
+            .build(cfg);
+
+        let res = mock.lookup("ok.example.com", RecordType::A).await.unwrap();
+        assert_eq!(res.answers().len(), 1);
+    }
+
     /// 合法前缀：v4/v6 都按给定前缀截断成网段。
     #[test]
     fn test_ipnet_from_subnet_valid() {

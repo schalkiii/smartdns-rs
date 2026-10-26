@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### test: 补 bogus-nxdomain 用例并产出覆盖率矩阵
+
+- `test_bogus_nxdomain_filters_mocked_ip`：命中 `bogus-nxdomain` 的 A 记录整条应答转 NXDOMAIN，
+  未命中的照常返回（顺带覆盖 `LookupError::response_code()`）。
+- 新增 `docs/TEST-MATRIX.md`：按目录给出文件/行数/用例/零测试文件数，列出 7 类关键缺口、
+  本轮新增用例清单、已知阻塞（含证据）与复现命令。
+- 测试总量 351 + 10 + 7；零测试源文件 79 → 77。
+
 ### test: 覆盖并发上限判定与双栈切换判据
 
 - `src/app.rs`：把 `max-query-limit` 的判定抽成 `should_refuse_query`，补 4 条用例

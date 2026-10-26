@@ -54,7 +54,7 @@
 | T4 | `src/api/*.rs`（14 文件） | 0 测试，含 4 个写接口 | 中 | 接口语义变化无回归网 |
 | T5 | `src/libdns/custom/connection_provider.rs` | 连接池/限速器有 `test_stress_*` 用例但耗时 >60s，且核心分支（槽位耗尽、取消）靠压测而非确定性用例 | 中 | 僵尸请求类问题复发难以及早发现 |
 | T6 | `tests/` | 仅 3 个文件 18 例，缺「启动服务 → 真实 DNS 报文 → 断言中间件链输出」的端到端用例 | 中 | 链序/开关组合的集成回归无覆盖 |
-| T7 | `src/dns_mw_bogus.rs`、`infra/process_guard.rs`、`infra/http_client.rs` | 零测试 | 低 | 局部逻辑错误只能靠线上暴露 |
+| T7 | `src/dns_mw_bogus.rs`、`infra/process_guard.rs`、`infra/http_client.rs` | `bogus-nxdomain` 已补 1 条链路用例；`process_guard` / `http_client` 仍零测试 | 低 | 局部逻辑错误只能靠线上暴露 |
 
 ### 2.4 文档一致性 / 缺漏（维度 1 / 2）
 
@@ -146,4 +146,4 @@
 | C2（`rr-ttl/min/max` 未作用于缓存 TTL；`reply-max` 链序原判断有误） | **已修复**：`rr_ttl_bounds` / `clamp_ttl_bounds` 供 addr 与 cache 共用，入库前夹取；新增 2 个单测 |
 | S1（API 鉴权实现）、A1/A2（拆分大文件） | 未处置，按第 4 节优先级排期 |
 | T1/T2 | **部分已补**：新增 `should_refuse_query`、`is_that_faster` 各 4 条边界用例（350+10+7 全绿） |
-| T6（跨中间件端到端） | **受阻**：`DnsMockMiddleware` 以 `query.original()` 取键，cname 改写后的查询无法命中；需先让 mock 支持按 `query.name()` 匹配 |
+| T6（跨中间件端到端） | **受阻且已定位到一半**：直查 target 能命中 mock，但经 cname 改写后落到默认处理器；需要链路追踪（记录每层 middleware）再定位。详见 `docs/TEST-MATRIX.md` §4 |
