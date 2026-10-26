@@ -38,7 +38,7 @@
 | # | 位置 | 问题 | 严重度 | 影响范围 |
 | :--- | :--- | :--- | :--- | :--- |
 | C1 | `src/dns_mw.rs:43-50` | 客户端 EDNS Client Subnet 的 `source_prefix` 直接被 `Ipv4Net::new/Ipv6Net::new(..).unwrap()` 使用。hickory 的 `EcsOption::read`（`crates/proto/src/rr/rdata/opt.rs:701-730`）把 prefix 当未校验 `u8` 读入，因此发包方给出 `source_prefix > 32`（v4）/`> 128`（v6）时 `new()` 返回 `Err` → **请求任务 panic** | 中 | 任意客户端可远程触发；tokio unwind 不会杀进程，但该查询不应答、每包刷一条 panic 日志；release 未开 `panic=abort`，故不会整进程崩溃 |
-| C2 | `src/dns_mw_addr.rs:84-97` | `rr-ttl-reply-max` 与 `rr-ttl-max` 都通过 `record.set_max_ttl()` 直接改记录，而 addr 中间件位于缓存中间件**内层**（响应回程先经 addr 再回到 cache）。若缓存存入的是被 reply-max 截短的 TTL，则缓存寿命短于 C 版（C 在 `context.c:807` 的**回复构建阶段**才截断，缓存保留真实 TTL） | 待核实·中 | 若成立：开启 `rr-ttl-reply-max` 时缓存命中率下降、上游查询量上升。需要按链序实测确认 |
+| C2 | `src/dns_mw_cache.rs:423-434`（入库）、`src/dns_mw_addr.rs`（回复） | 审计初稿把链序写反了：`builder.with` 先注册者最外层，addr 在 cache **外层**，所以 `rr-ttl-reply-max` 本来就只压回复、**与 C 一致**。真正的分歧是 `rr-ttl` / `rr-ttl-min` / `rr-ttl-max`：C 在**入库时**就用 `_dns_server_get_conf_ttl` 计算缓存 TTL（`cache.c:140`），Rust 只在回复时夹取，缓存存的是上游原始 TTL ——短 TTL 记录会比配置的最小值更早过期，长 TTL 记录会突破 `rr-ttl-max` 继续驻留 | 已核实并修复 | 开启 `rr-ttl-min` 时缓存命中率偏低、上游查询偏多；开启 `rr-ttl-max` 时可能超期提供陈旧记录 |
 | C3 | `src/infra/mapped_file.rs:250,254` | `Mutex::lock().unwrap()`：写线程一旦 panic 使互斥量中毒，后续所有持久化写入连锁 panic | 低 | 缓存持久化写入路径；进程仍可服务，但 checkpoint 失效且刷错误日志 |
 | C4 | `src/infra/dhcp.rs:58` | `M::from_bytes(&buf[..n]).unwrap()` 解析收到的 DHCP 报文 | 低 | 需确认调用点是否在在线请求路径；畸形报文会 panic 该任务 |
 | C5 | `src/config/domain.rs:175` | `Display` 里 `str::from_utf8(self.0.pattern()).unwrap()` | 低 | 仅在 wildcard 模式可打印时；构造来源是 `&str`，当前不可达 |
@@ -88,9 +88,10 @@
 **验证**：`cargo test --bin smartdns mapped_file`；构造中毒场景可选用例（可选）。
 
 ### 建议 3（对应 C2，优先级 P1，需串行在建议 1/2 之后）
-**做法**：先写一条端到端用例确定链序（开启 `rr-ttl-reply-max 60` + 上游返回 TTL 600，断言缓存内 TTL 与应答 TTL）；若确认缓存被截短，则把 reply-max 的截断移到最外层（新增中间件或在 `app.rs` 返回前处理），`rr-ttl-max` 仍留在 addr。
-**文件**：`src/dns_mw_addr.rs`、`src/app.rs`、`tests/`（新增）。
-**验证**：两条断言（应答 TTL=60、二次命中来自缓存且上游查询计数不增加）；`/api/stats` 的 `cache_miss_queries` 不增长。
+**状态：已实施**。链序经代码核对为 addr（外层）→ cache（内层），`reply-max` 无需搬家；实际修的是
+`rr-ttl` / `rr-ttl-min` / `rr-ttl-max` 未作用于缓存 TTL：抽出 `rr_ttl_bounds` / `clamp_ttl_bounds`
+（`src/dns_mw_addr.rs`），缓存中间件入库前按同一套边界夹取，`reply-max` 保持只压回复。
+**验证**：新增 2 个单测（边界折叠含 `rr-ttl` 固定值与 `reply-max` 不参与、夹取顺序）；全量测试 348+10+7 绿。
 
 ### 建议 4（对应 S1 + D2，优先级 P0-文档 / P1-实现，可分两步）
 **做法**：① 在现有警示下方补两句：列出可写接口（缓存清空、address 增删改、配置重载），并给出「放反向代理 + 认证之后」的推荐做法。② 中期可选：为 `/api/*` 增加 token 或 basic auth（配置项 `web-ui-auth` 之类），写接口强制鉴权。
@@ -133,7 +134,7 @@
 
 - **已逐项对照 C 原版**：配置指令全集（此前 16 批已补齐并记录于 `docs/port-gap-analysis.md`）；TTL 截断的配置面（`rr-ttl-*` 在 Rust 的接线点已定位）；CNAME 规则链（Rust 用新 `DnsContext` 重入，不会递归应用 cname 规则，C 的 `has_cname_loop` 主要针对上游返回链，hickory 侧有自有深度限制）；README 的 32-slot / 预取参数等数值声明。
 - **未做穷尽逐函数比对**：C 的 `dns_server/context.c` 全流程、EDNS 选项全集、DNSSEC 验证路径、DoH3/DoQ 的协议细节、`libdns/custom/connection_provider.rs` 的并发正确性——这些需要构造竞态/协议级用例，超出本次静态审计与 token 预算。
-- **运行态**：本机部署 0.13.5 实测正常（见 `docs/` 之外的部署记录）；C2 的缓存交互结论**必须**用建议 3 的用例确认后再定性。
+- **运行态**：本机部署 0.13.5 实测正常（见 `docs/` 之外的部署记录）；C2 已按代码（链序）与 C 原文（cache.c:140）定性并修复，未做真实上游 TTL 的端到端复现。
 
 ## 6. 处置状态（审计后同日更新）
 
@@ -142,5 +143,5 @@
 | C1（ECS 前缀 panic） | **已修复**：`src/dns_mw.rs` 新增 `ipnet_from_subnet`，非法前缀返回 `None`（按未携带 ECS 处理），3 个单测覆盖合法/非法/IPv4-mapped |
 | C3（写锁中毒） | **已修复**：`src/infra/mapped_file.rs` 两处改为 `unwrap_or_else(|e| e.into_inner())` |
 | D1（预取参数措辞）／D2（可写接口清单） | **已修复**：两份 README 同步 |
-| C2（rr-ttl-reply-max 与缓存链序） | 未处置，需按建议 3 先写端到端用例确认 |
+| C2（`rr-ttl/min/max` 未作用于缓存 TTL；`reply-max` 链序原判断有误） | **已修复**：`rr_ttl_bounds` / `clamp_ttl_bounds` 供 addr 与 cache 共用，入库前夹取；新增 2 个单测 |
 | S1（API 鉴权实现）、T1–T7（补测试）、A1/A2（拆分大文件） | 未处置，按第 4 节优先级排期 |

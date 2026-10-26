@@ -424,10 +424,18 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsCacheMiddl
                     let query = req.query().original().to_owned();
                     let server_group_name = ctx.server_group_name();
 
+                    // 与 C 版一致：rr-ttl / rr-ttl-min / rr-ttl-max 在**入库时**就作用于缓存 TTL
+                    // （cache.c:140）；rr-ttl-reply-max 只压回复 TTL，不参与缓存寿命。
+                    let (ttl_min, ttl_max) = crate::dns_mw_addr::rr_ttl_bounds(ctx);
+                    let mut records = lookup.records().to_vec();
+                    if ttl_min.is_some() || ttl_max.is_some() {
+                        crate::dns_mw_addr::clamp_ttl_bounds(&mut records, ttl_min, ttl_max);
+                    }
+
                     self.cache
                         .insert_records(
                             query,
-                            lookup.records().iter().cloned(),
+                            records.into_iter(),
                             Instant::now(),
                             server_group_name,
                         )

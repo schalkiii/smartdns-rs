@@ -10,6 +10,40 @@ use crate::libdns::resolver::TtlClip;
 #[derive(Debug)]
 pub struct AddressMiddleware;
 
+/// `rr-ttl` / `rr-ttl-min` / `rr-ttl-max` 的生效边界：域规则优先于全局。
+///
+/// C 版在缓存写入（`cache.c:140`）与回复构建（`context.c:807` 经 `rules.c:397`）
+/// 都用同一套边界，因此这里同时供 address 中间件（回复）与 cache 中间件（入库）使用。
+pub(crate) fn rr_ttl_bounds(ctx: &DnsContext) -> (Option<u32>, Option<u32>) {
+    let min = ctx
+        .domain_rule
+        .get_ref(|r| r.rr_ttl_min.as_ref())
+        .cloned()
+        .or_else(|| ctx.cfg().rr_ttl_min())
+        .map(|i| i as u32);
+
+    let max = ctx
+        .domain_rule
+        .get_ref(|r| r.rr_ttl_max.as_ref())
+        .cloned()
+        .or_else(|| ctx.cfg().rr_ttl_max())
+        .map(|i| i as u32);
+
+    (min, max)
+}
+
+/// 按边界夹取记录 TTL（先 min 后 max，与 C 的 `_dns_server_get_conf_ttl` 顺序一致）。
+pub(crate) fn clamp_ttl_bounds(records: &mut [Record], min: Option<u32>, max: Option<u32>) {
+    for record in records {
+        if let Some(min) = min {
+            record.set_min_ttl(min);
+        }
+        if let Some(max) = max {
+            record.set_max_ttl(max);
+        }
+    }
+}
+
 #[async_trait::async_trait]
 impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for AddressMiddleware {
     async fn handle(
@@ -68,30 +102,16 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for AddressMiddle
                     }
                 }
 
-                let rr_ttl_min = ctx
-                    .domain_rule
-                    .get_ref(|r| r.rr_ttl_min.as_ref())
-                    .cloned()
-                    .or_else(|| ctx.cfg().rr_ttl_min())
-                    .map(|i| i as u32);
-
-                let rr_ttl_max = ctx
-                    .domain_rule
-                    .get_ref(|r| r.rr_ttl_max.as_ref())
-                    .cloned()
-                    .or_else(|| ctx.cfg().rr_ttl_max())
-                    .map(|i| i as u32);
+                let (rr_ttl_min, rr_ttl_max) = rr_ttl_bounds(ctx);
                 let rr_ttl_reply_max = ctx.cfg().rr_ttl_reply_max().map(|i| i as u32);
 
                 if rr_ttl_min.is_some() || rr_ttl_max.is_some() || rr_ttl_reply_max.is_some() {
-                    for record in records.to_mut() {
-                        if let Some(rr_ttl_min) = rr_ttl_min {
-                            record.set_min_ttl(rr_ttl_min);
-                        }
-                        if let Some(rr_ttl_reply_max) = rr_ttl_reply_max {
+                    let records = records.to_mut();
+                    // min/max 与 C 的 _dns_server_get_conf_ttl 一致；reply-max 在此之上再压一次回复 TTL
+                    clamp_ttl_bounds(records, rr_ttl_min, rr_ttl_max);
+                    if let Some(rr_ttl_reply_max) = rr_ttl_reply_max {
+                        for record in records {
                             record.set_max_ttl(rr_ttl_reply_max);
-                        } else if let Some(rr_ttl_max) = rr_ttl_max {
-                            record.set_max_ttl(rr_ttl_max);
                         }
                     }
                 }
@@ -223,7 +243,7 @@ mod tests {
         dns_mw::*,
         libdns::proto::{
             op::{self, Edns, Query},
-            rr::{rdata, rdata::opt::ClientSubnet, rdata::opt::EdnsOption},
+            rr::{Record, rdata, rdata::opt::ClientSubnet, rdata::opt::EdnsOption},
         },
     };
 
@@ -719,5 +739,61 @@ mod tests {
         assert!(lookup.is_from_cache(), "from_cache 标记在截断后丢失");
 
         Ok(())
+    }
+
+    /// rr-ttl / rr-ttl-min / rr-ttl-max 会折叠成同一对边界；rr-ttl-reply-max 不参与。
+    #[test]
+    fn test_rr_ttl_bounds_folds_fixed_ttl() {
+        let cfg = RuntimeConfig::builder()
+            .with("rr-ttl-min 300")
+            .with("rr-ttl-max 600")
+            .build()
+            .unwrap();
+        let ctx = DnsContext::new(
+            &"example.com".parse().unwrap(),
+            std::sync::Arc::new(cfg),
+            Default::default(),
+        );
+        assert_eq!(rr_ttl_bounds(&ctx), (Some(300), Some(600)));
+
+        let cfg = RuntimeConfig::builder().with("rr-ttl 120").build().unwrap();
+        let ctx = DnsContext::new(
+            &"example.com".parse().unwrap(),
+            std::sync::Arc::new(cfg),
+            Default::default(),
+        );
+        assert_eq!(rr_ttl_bounds(&ctx), (Some(120), Some(120)));
+
+        let cfg = RuntimeConfig::builder()
+            .with("rr-ttl-reply-max 60")
+            .build()
+            .unwrap();
+        let ctx = DnsContext::new(
+            &"example.com".parse().unwrap(),
+            std::sync::Arc::new(cfg),
+            Default::default(),
+        );
+        assert_eq!(rr_ttl_bounds(&ctx), (None, None), "reply-max 只压回复");
+    }
+
+    /// 夹取顺序：先 min 后 max，结果等于 min(max(ttl, min), max)。
+    #[test]
+    fn test_clamp_ttl_bounds() {
+        let name: crate::libdns::proto::rr::Name = "example.com".parse().unwrap();
+        let mut records = vec![
+            Record::from_rdata(
+                name.clone(),
+                5,
+                RData::A("192.0.2.1".parse::<std::net::Ipv4Addr>().unwrap().into()),
+            ),
+            Record::from_rdata(
+                name,
+                900,
+                RData::A("192.0.2.2".parse::<std::net::Ipv4Addr>().unwrap().into()),
+            ),
+        ];
+        clamp_ttl_bounds(&mut records, Some(300), Some(600));
+        assert_eq!(records[0].ttl(), 300);
+        assert_eq!(records[1].ttl(), 600);
     }
 }

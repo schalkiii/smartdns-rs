@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### fix(cache): rr-ttl / rr-ttl-min / rr-ttl-max 同时作用于缓存 TTL
+
+C 版在**入库时**就用 `_dns_server_get_conf_ttl` 计算缓存 TTL（`cache.c:140`），本移植版此前只在回复时
+夹取，缓存存的是上游原始 TTL：开 `rr-ttl-min` 时条目比配置更早过期（命中率低、上游查询多），
+开 `rr-ttl-max` 时长 TTL 记录会突破上限继续驻留。
+
+现在抽出 `rr_ttl_bounds` / `clamp_ttl_bounds`（`src/dns_mw_addr.rs`），addr（回复）与 cache（入库）共用；
+`rr-ttl-reply-max` 维持只压回复、不参与缓存寿命（与 C 一致）。新增 2 个单测覆盖边界折叠与夹取顺序。
+测试：348 + 10 + 7 全绿，clippy 0，fmt 0。
+
 ### fix(dns): 校验 ECS 前缀，伪造前缀不再触发请求任务 panic
 
 hickory 的 `EcsOption` 解析把 `source_prefix` 当裸 `u8` 读入、不做范围校验，客户端可以给出
