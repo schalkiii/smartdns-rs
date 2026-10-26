@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### test: 补 server socket 绑定用例
+
+- `server::net` 新增 2 例：端口 0 时 UDP/TCP 均绑定成功（含 `socket-buff-size` 路径）、
+  端口被占用时返回 Err 而不是 panic（回归 R2 的 `bind_to` 行为）。
+- 尝试补 zone 身份查询用例未通过（`server-name` TXT 返回 NoRecordsFound），已回退，
+  原因与复现条件记入 `docs/TEST-MATRIX.md` 的阻塞章节。
+- 测试总量 353 + 10 + 7。
+
 ### test: 补 bogus-nxdomain 用例并产出覆盖率矩阵
 
 - `test_bogus_nxdomain_filters_mocked_ip`：命中 `bogus-nxdomain` 的 A 记录整条应答转 NXDOMAIN，

@@ -177,3 +177,37 @@ impl LocalAddr for UdpSocket {
         self.local_addr()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 端口 0 让系统分配：UDP/TCP 都应绑定成功，且设置的缓冲区不导致失败。
+    #[tokio::test]
+    async fn test_setup_sockets_ephemeral_port() {
+        let addr = "127.0.0.1:0".parse().unwrap();
+        let udp = setup_udp_socket(addr, None, Some(256 * 1024)).expect("UDP 应绑定成功");
+        assert_ne!(udp.local_addr().unwrap().port(), 0);
+
+        let tcp = setup_tcp_socket(addr, None, Some(256 * 1024)).expect("TCP 应监听成功");
+        assert_ne!(tcp.local_addr().unwrap().port(), 0);
+    }
+
+    /// 端口被占用时返回 Err，而不是 panic（对齐 R2 的 bind_to 行为）。
+    #[tokio::test]
+    async fn test_bind_conflict_returns_error() {
+        let udp = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let addr = udp.local_addr().unwrap();
+        assert!(
+            setup_udp_socket(addr, None, None).is_err(),
+            "同一 UDP 端口重复绑定应报错"
+        );
+
+        let tcp = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = tcp.local_addr().unwrap();
+        assert!(
+            setup_tcp_socket(addr, None, None).is_err(),
+            "同一 TCP 端口重复监听应报错"
+        );
+    }
+}

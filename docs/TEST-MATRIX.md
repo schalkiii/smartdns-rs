@@ -2,7 +2,7 @@
 
 生成方式（可复现）：遍历 `src/**/*.rs`，统计 `#[test]` / `#[tokio::test]` 数量与行数（见文末命令）。
 当前基线：`src` 167 文件 / 33 754 行 / **370 个单元测试（正则计数，含 feature 门控模块）**；`tests/` 3 文件 18 个集成用例；
-`cargo test --features=disable_icmp_ping` = **351 + 10 + 7** 全绿。
+`cargo test --features=disable_icmp_ping` = **353 + 10 + 7** 全绿。
 
 ## 1. 按目录汇总
 
@@ -10,7 +10,7 @@
 | :--- | ---: | ---: | ---: | ---: |
 | `src/`（根，核心中间件/客户端/配置） | 34 | 17 010 | 198 | 8 |
 | `src/api`（Web UI + HTTP DNS） | 15 | 1 361 | **0** | **15** |
-| `src/server`（UDP/TCP/TLS/HTTPS/QUIC/H3 监听） | 9 | 1 311 | **0** | **9** |
+| `src/server`（UDP/TCP/TLS/HTTPS/QUIC/H3 监听） | 9 | 1 311 | 2（`net.rs` 绑定/占用） | 8 |
 | `src/config`（schema + 规则组） | 15 | 2 574 | 32 | 7 |
 | `src/config/parser`（配置解析） | 37 | 4 605 | 73 | 1 |
 | `src/config/parser/nom_recipes` | 5 | 211 | 4 | 2 |
@@ -28,7 +28,7 @@
 | # | 缺口 | 量化 | 为什么是风险 | 补测前置条件 |
 | :--- | :--- | :--- | :--- | :--- |
 | G1 | `src/api/*` 全部无测试 | 15 文件 / 1 361 行 / 0 用例，含 4 个写接口（清缓存、重载配置、address 增删改） | 接口语义/序列化/错误码变化无回归网 | 需要能构造 `ServeState`（依赖 `DnsClientHandle`）；建议先抽一个只依赖 `Arc<RuntimeConfig>` 的路由层 |
-| G2 | `src/server/*` 监听器无测试 | 9 文件 / 1 311 行 / 0 用例 | bind 失败、握手超时、缓冲区设置等路径只能人工联调 | 可用临时端口起监听 + 发送真实报文；TLS 需自签证书夹具（`rustls_self_signed` 已有生成器） |
+| G2 | `src/server/*` 监听器只覆盖了 socket 绑定层 | `net.rs` 已补 2 例（临时端口绑定成功、端口占用返回 Err 而非 panic）；TLS/HTTP/QUIC 监听循环仍未测 | 握手超时、协议循环等路径只能人工联调 | 各协议监听需临时端口 + 真实报文；TLS 用已有自签证书生成器做夹具 |
 | G3 | 并发门只有纯判定覆盖 | `should_refuse_query` 4 例；真实链路（含 `active_queries` 归还）未测 | 归还逻辑写错会永久降级并发 | 需要完整 `App` 装配；或在 dispatch 层抽成不依赖 socket 的 `run_once(requests) -> 响应列表` |
 | G4 | 双栈优选无法注入延迟 | 判据 `is_that_faster` 4 例；`which_faster`/`multi_mode_ping_fastest` 依赖真实 ICMP | 优选策略回归只能线上观察 | 把 `ping_fastest` 调用改成注入式（`fn` 指针或 trait），属小幅架构改动 |
 | G5 | 跨中间件链路无端到端用例 | `tests/` 仅 18 例，且无「cname 改写 → 下游规则命中」这类组合 | 链序/上下文传递错误难发现 | 见 §4 的阻塞记录：`DnsMockMiddleware` 与 cname 改写的 continuation 交互未定位 |
@@ -54,7 +54,10 @@
    （记录每层 middleware 名）再定位，不能靠猜。
 2. **`DnsMockMiddleware` 的匹配键**：以 `query().original()` 取值；`with_cname` 会整体替换查询，
    因此理论上 original 也变成新名——与上一条的表现矛盾，同样需要追踪先定位。
-3. **`ServeState` 构造成本**：`src/api` 的路由测试需要一个可用的 `DnsClientHandle`；
+3. **zone 身份查询**：`DnsMockMiddleware::mock(DnsZoneMiddleware::new())` 查 TXT `server-name`
+   （带/不带尾点都试过）返回 `NoRecordsFound`；身份 provider 的匹配分支（`identity.rs:104`）
+   没有被触发，怀疑与 `search()` 构造的 ctx/查询名规范化有关，需要在 provider 入口加日志再定位。
+4. **`ServeState` 构造成本**：`src/api` 的路由测试需要一个可用的 `DnsClientHandle`；
    建议先做「把 handler 依赖收窄成 trait」的小重构，再补测试。
 
 ## 5. 复现命令
