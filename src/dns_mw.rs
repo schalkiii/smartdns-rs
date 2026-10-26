@@ -17,6 +17,21 @@ use crate::{
 
 pub type DnsMiddlewareHost = MiddlewareHost<DnsContext, DnsRequest, DnsResponse, DnsError>;
 
+/// 把客户端 EDNS Client Subnet 规范化成 `IpNet`。
+///
+/// hickory 的 `EcsOption` 解析不做前缀校验（`source_prefix` 只是裸 `u8`），
+/// 因此对方可以给出 > 32（v4）/ > 128（v6）的非法值；这里返回 `None`，
+/// 等价于「没带 ECS」，让调用方回落到客户端源 IP，而不是让请求任务 panic。
+fn ipnet_from_subnet(addr: IpAddr, source_prefix: u8) -> Option<IpNet> {
+    match addr {
+        IpAddr::V4(addr) => Ipv4Net::new(addr, source_prefix).ok().map(IpNet::V4),
+        IpAddr::V6(addr) => match addr.to_ipv4_mapped() {
+            Some(addr) => Ipv4Net::new(addr, source_prefix).ok().map(IpNet::V4),
+            None => Ipv6Net::new(addr, source_prefix).ok().map(IpNet::V6),
+        },
+    }
+}
+
 pub struct DnsMiddlewareHandler {
     cfg: Arc<RuntimeConfig>,
     host: DnsMiddlewareHost,
@@ -40,15 +55,7 @@ impl DnsMiddlewareHandler {
                 EdnsOption::Subnet(s) => Some(s),
                 _ => None,
             })
-            .map(|s| match s.addr() {
-                std::net::IpAddr::V4(addr) => {
-                    IpNet::V4(Ipv4Net::new(addr, s.source_prefix()).unwrap())
-                }
-                std::net::IpAddr::V6(addr) => match addr.to_ipv4_mapped() {
-                    Some(addr) => IpNet::V4(Ipv4Net::new(addr, s.source_prefix()).unwrap()),
-                    None => IpNet::V6(Ipv6Net::new(addr, s.source_prefix()).unwrap()),
-                },
-            });
+            .and_then(|s| ipnet_from_subnet(s.addr(), s.source_prefix()));
 
         let client_rules = cfg.client_rules();
         let rule_group_name = match client_subnet {
@@ -364,5 +371,41 @@ mod tests {
         let err = res.unwrap_err();
 
         assert!(err.is_soa());
+    }
+
+    /// 合法前缀：v4/v6 都按给定前缀截断成网段。
+    #[test]
+    fn test_ipnet_from_subnet_valid() {
+        // ipnet 的 new() 不截断主机位，这里按网络地址比较
+        assert_eq!(
+            ipnet_from_subnet("1.2.3.4".parse().unwrap(), 24).map(|n| n.trunc()),
+            Some(IpNet::V4(
+                Ipv4Net::new("1.2.3.0".parse().unwrap(), 24).unwrap()
+            ))
+        );
+        assert_eq!(
+            ipnet_from_subnet("2001:db8::1".parse().unwrap(), 64).map(|n| n.trunc()),
+            Some(IpNet::V6(
+                Ipv6Net::new("2001:db8::".parse().unwrap(), 64).unwrap()
+            ))
+        );
+    }
+
+    /// 非法前缀（hickory 不校验，客户端可伪造）必须安静地丢弃，而不是 panic。
+    #[test]
+    fn test_ipnet_from_subnet_rejects_oversized_prefix() {
+        assert_eq!(ipnet_from_subnet("1.2.3.4".parse().unwrap(), 33), None);
+        assert_eq!(ipnet_from_subnet("2001:db8::1".parse().unwrap(), 129), None);
+    }
+
+    /// IPv4-mapped IPv6 地址按 v4 处理，与后续 client-rules 匹配保持一致。
+    #[test]
+    fn test_ipnet_from_subnet_mapped_v6() {
+        assert_eq!(
+            ipnet_from_subnet("::ffff:1.2.3.4".parse().unwrap(), 24).map(|n| n.trunc()),
+            Some(IpNet::V4(
+                Ipv4Net::new("1.2.3.0".parse().unwrap(), 24).unwrap()
+            ))
+        );
     }
 }

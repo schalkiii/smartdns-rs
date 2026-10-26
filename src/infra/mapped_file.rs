@@ -247,11 +247,12 @@ impl io::Write for MutexMappedFile {
 
 impl io::Write for &MutexMappedFile {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.lock().unwrap().write(buf)
+        // 写线程一旦 panic 会让互斥量中毒；持久化写入不该因此连锁崩溃，取回内部值继续
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).write(buf)
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.0.lock().unwrap().flush()
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).flush()
     }
 }
 
