@@ -171,7 +171,7 @@ mod tests {
         let mock = DnsMockMiddleware::mock(DnsZoneMiddleware::new()).build(cfg);
         let response = search_with_query(
             &mock,
-            "server-name",
+            "server-name.",
             RecordType::TXT,
             DNSClass::CH,
             "192.168.1.8:5300".parse().unwrap(),
