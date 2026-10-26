@@ -402,10 +402,11 @@ pub fn serve(cfg: Arc<RuntimeConfig>) {
                     let app = app.clone();
 
                     // 对应 C 版 dns_server.c:483：超过并发上限直接回 REFUSED，不进入处理链
-                    if max_query_limit > 0
-                        && !server_opts.is_background
-                        && app.active_queries.load(Ordering::Relaxed) > max_query_limit
-                    {
+                    if should_refuse_query(
+                        max_query_limit,
+                        server_opts.is_background,
+                        app.active_queries.load(Ordering::Relaxed),
+                    ) {
                         warn_query_limit_reached(max_query_limit);
                         let _ = sender.send(refused_response(message));
                         // 该请求已计入 active_queries 但不会进入任何批次，手动归还
@@ -679,6 +680,12 @@ async fn process(
     }
 }
 
+/// 并发超限判定（对应 C 版 `dns_server.c:483`）：
+/// `max-query-limit` 为 0 表示不限；超过上限（严格大于）且不是后台预取时才拒绝。
+fn should_refuse_query(max_query_limit: usize, is_background: bool, active_queries: usize) -> bool {
+    max_query_limit > 0 && !is_background && active_queries > max_query_limit
+}
+
 /// 并发超限告警按 120s 节流，避免高负载时刷屏（对齐 C 版行为）。
 fn warn_query_limit_reached(max_query_limit: usize) {
     use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
@@ -822,4 +829,22 @@ fn build_middleware(
     };
 
     Arc::new(middleware_handler)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_refuse_query;
+
+    /// `max-query-limit` 语义（对齐 C `dns_server.c:483`）：0 不限、等于上限放行、严格超过才拒绝、
+    /// 后台预取豁免。
+    #[test]
+    fn test_should_refuse_query() {
+        assert!(!should_refuse_query(0, false, usize::MAX), "0 表示不限");
+        assert!(!should_refuse_query(10, false, 10), "等于上限仍放行");
+        assert!(should_refuse_query(10, false, 11), "严格超过才拒绝");
+        assert!(
+            !should_refuse_query(10, true, 100),
+            "后台预取不受并发上限约束"
+        );
+    }
 }

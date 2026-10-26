@@ -159,9 +159,7 @@ async fn which_faster(
 
     let that_faster = match which_faster {
         Either::Right((Some((_, that_dura)), this_ping)) => match this_ping.await {
-            Some((_, this_dura)) => {
-                this_dura > that_dura && (this_dura - that_dura) > selection_threshold
-            }
+            Some((_, this_dura)) => is_that_faster(this_dura, that_dura, selection_threshold),
             None => true,
         },
         _ => false,
@@ -210,4 +208,34 @@ async fn multi_mode_ping_fastest(
     }
 
     fastest_ip
+}
+
+/// 「另一地址族明显更快」的判据：不仅更快，且差值严格超过 `dualstack-ip-selection-threshold`，
+/// 避免延迟抖动导致 A/AAAA 来回切换。
+fn is_that_faster(this_dura: Duration, that_dura: Duration, threshold: Duration) -> bool {
+    this_dura > that_dura && (this_dura - that_dura) > threshold
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_that_faster;
+    use std::time::Duration;
+
+    #[test]
+    fn test_is_that_faster() {
+        let ms = Duration::from_millis;
+        assert!(
+            is_that_faster(ms(100), ms(50), ms(20)),
+            "差值超过阈值应判更快"
+        );
+        assert!(
+            !is_that_faster(ms(100), ms(50), ms(50)),
+            "差值等于阈值不切换（严格大于）"
+        );
+        assert!(!is_that_faster(ms(50), ms(100), ms(20)), "本族更快不应切换");
+        assert!(
+            !is_that_faster(ms(60), ms(50), ms(20)),
+            "差值小于阈值不切换"
+        );
+    }
 }

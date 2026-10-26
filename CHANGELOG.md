@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### test: 覆盖并发上限判定与双栈切换判据
+
+- `src/app.rs`：把 `max-query-limit` 的判定抽成 `should_refuse_query`，补 4 条用例
+  （0=不限、等于上限放行、严格超过才拒绝、后台预取豁免）。
+- `src/dns_mw_dualstack.rs`：把「另一地址族明显更快」抽成 `is_that_faster`，补 4 条边界用例
+  （差值必须严格大于 `dualstack-ip-selection-threshold`）。
+- 测试总量 350 + 10 + 7；仍未覆盖的部分：并发门的真实链路（需完整 App 装配）、
+  dualstack 的 ping 注入（现依赖真实 ICMP，CI 下被禁用）、跨中间件端到端用例
+  （`DnsMockMiddleware` 以 `query.original()` 取键，cname 改写后的查询无法命中）。
+
 ### fix(cache): rr-ttl / rr-ttl-min / rr-ttl-max 同时作用于缓存 TTL
 
 C 版在**入库时**就用 `_dns_server_get_conf_ttl` 计算缓存 TTL（`cache.c:140`），本移植版此前只在回复时

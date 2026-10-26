@@ -48,8 +48,8 @@
 
 | # | 位置 | 问题 | 严重度 | 影响范围 |
 | :--- | :--- | :--- | :--- | :--- |
-| T1 | `src/app.rs`（825 行） | 中间件链装配、`max-query-limit` 并发门、错误到响应码的映射全部**无单测** | 高 | 链序写错/门限回归只能靠人工压测发现 |
-| T2 | `src/dns_mw_dualstack.rs` | README 主打能力「返回最快 IP」的选择逻辑**无单测**；阈值（`dualstack_ip_selection_threshold`）分支未覆盖 | 高 | 选择策略回归无声 |
+| T1 | `src/app.rs`（825 行） | 中间件链装配、错误到响应码的映射无单测；`max-query-limit` 判定已抽出 `should_refuse_query` 并有 4 条用例（**判定已覆盖，真实链路的并发行为仍未测**） | 中 | 门限语义有回归网；链序仍需人工压测 |
+| T2 | `src/dns_mw_dualstack.rs` | 阈值判据已抽出 `is_that_faster` 并覆盖 4 个边界；**ping 结果无法注入**，`which_faster` 与 `multi_mode_ping_fastest` 仍依赖真实 ICMP（CI 关闭），完整选择策略未测 | 中 | 判据有回归网；真实优选行为仍只能线上观察 |
 | T3 | `src/server/{udp,tcp,tls,https,quic,h3}.rs` | 所有监听器的 bind/超时/错误路径无单测；只靠 CI 编译与手工联调 | 中 | 端口/协议层回归依赖人工 |
 | T4 | `src/api/*.rs`（14 文件） | 0 测试，含 4 个写接口 | 中 | 接口语义变化无回归网 |
 | T5 | `src/libdns/custom/connection_provider.rs` | 连接池/限速器有 `test_stress_*` 用例但耗时 >60s，且核心分支（槽位耗尽、取消）靠压测而非确定性用例 | 中 | 僵尸请求类问题复发难以及早发现 |
@@ -144,4 +144,6 @@
 | C3（写锁中毒） | **已修复**：`src/infra/mapped_file.rs` 两处改为 `unwrap_or_else(|e| e.into_inner())` |
 | D1（预取参数措辞）／D2（可写接口清单） | **已修复**：两份 README 同步 |
 | C2（`rr-ttl/min/max` 未作用于缓存 TTL；`reply-max` 链序原判断有误） | **已修复**：`rr_ttl_bounds` / `clamp_ttl_bounds` 供 addr 与 cache 共用，入库前夹取；新增 2 个单测 |
-| S1（API 鉴权实现）、T1–T7（补测试）、A1/A2（拆分大文件） | 未处置，按第 4 节优先级排期 |
+| S1（API 鉴权实现）、A1/A2（拆分大文件） | 未处置，按第 4 节优先级排期 |
+| T1/T2 | **部分已补**：新增 `should_refuse_query`、`is_that_faster` 各 4 条边界用例（350+10+7 全绿） |
+| T6（跨中间件端到端） | **受阻**：`DnsMockMiddleware` 以 `query.original()` 取键，cname 改写后的查询无法命中；需先让 mock 支持按 `query.name()` 匹配 |
