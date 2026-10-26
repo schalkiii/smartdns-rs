@@ -123,7 +123,7 @@
 | 2 | 建议 2（mutex 毒性） | P1 | 可与 1 并行 | `mapped_file.rs` 独占 |
 | 3 | 建议 4-①（README 安全警示） | P0-文档 | 可与 1/2 并行 | 两份 README |
 | 4 | 建议 7（预取参数措辞） | P3 | 可与 3 并行（同文件，需串行合并） | 两份 README |
-| 5 | 建议 3（reply-max 链序） | P1 | **需串行**（依赖 1/2 的基线） | `dns_mw_addr.rs`、`app.rs`、`tests/` |
+| 5 | 建议 3（`rr-ttl` / `rr-ttl-min` / `rr-ttl-max` 入库生效） | 已完成 | — | `dns_mw_addr.rs`、`dns_mw_cache.rs` |
 | 6 | 建议 5（补测试） | P1 | 可在 3 之后并行 | `app.rs`、`dualstack`、`tests/`（与 3 的 `app.rs` 冲突 → 串行） |
 | 7 | 建议 4-②（API 鉴权实现） | P2 | 需单独设计 | `api/*`、`config/*` |
 | 8 | 建议 6（拆分大文件） | P2 | 需单独一轮 | `dns_conf.rs` 等 |
