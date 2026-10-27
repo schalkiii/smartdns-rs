@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v0.13.7] - 2026-10-28
+
 ### fix(client): 稳态不再强制 200ms socket 创建间隔（端到端延迟 200ms → 个位数毫秒）
 
 为规避 Windows `WSAENOBUFS` 加的**全局 socket 创建限速器**原先无条件生效：任意两次 socket 创建
