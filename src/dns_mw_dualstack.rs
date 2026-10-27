@@ -3,7 +3,6 @@ use std::time::Duration;
 
 use futures::FutureExt;
 use futures::future::{Either, select};
-use tokio::time::sleep;
 
 use crate::config::SpeedCheckMode;
 use crate::dns::*;
@@ -12,6 +11,13 @@ use crate::middleware::*;
 use crate::third_ext::FutureTimeoutExt;
 
 pub struct DnsDualStackIpSelectionMiddleware;
+
+/// 两族测速的**整体**预算（不是每族各 200ms）：超预算即视为测不出结果。
+const PING_BUDGET: Duration = Duration::from_millis(200);
+
+/// 等另一族应答的上限。上游单次查询超时是 5s，这里取 2s：正常 AAAA 远快于此，
+/// 只有链路异常时才会触发，避免「A 先到就无限等 AAAA」把尾延迟拖到秒级。
+const OTHER_FAMILY_WAIT_CAP: Duration = Duration::from_secs(2);
 
 #[async_trait::async_trait]
 impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError>
@@ -66,7 +72,13 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError>
             .domain_rule
             .get_ref(|r| r.speed_check_mode.as_ref())
             .cloned()
+            .or_else(|| ctx.cfg().speed_check_mode().cloned())
             .unwrap_or_default();
+
+        // 没有任何测速模式时无法比较两族延迟，继续并发另一族只是白等
+        if speed_check_mode.is_empty() {
+            return next.run(ctx, req).await;
+        }
 
         let ttl = ctx.cfg().rr_ttl().unwrap_or_default() as u32;
 
@@ -122,8 +134,8 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError>
                 Err(err) => Err(err),
             },
             Either::Right((res, this)) => match res {
-                Ok(that) => match this.await {
-                    Ok(this) => {
+                Ok(that) => match tokio::time::timeout(OTHER_FAMILY_WAIT_CAP, this).await {
+                    Ok(Ok(this)) => {
                         let that_faster = matches!(
                             which_faster(&this, &that, &speed_check_mode, selection_threshold)
                                 .await,
@@ -135,7 +147,10 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError>
                         }
                         Ok(this)
                     }
-                    Err(err) => Err(err),
+                    Ok(Err(err)) => Err(err),
+                    // 对方先到时本族仍未返回：按「对方更快」处理，AAAA 查询返回空，
+                    // 让客户端立刻走 A，而不是被异常链路拖住。
+                    Err(_) => this_no_records(),
                 },
                 Err(_) => this.await,
             },
@@ -152,8 +167,9 @@ async fn which_faster(
     let this_ip_addrs = this.ip_addrs();
     let that_ip_addrs = that.ip_addrs();
 
-    let this_ping = multi_mode_ping_fastest(this_ip_addrs, modes.to_vec()).boxed();
-    let that_ping = multi_mode_ping_fastest(that_ip_addrs, modes.to_vec()).boxed();
+    let deadline = tokio::time::Instant::now() + PING_BUDGET;
+    let this_ping = multi_mode_ping_fastest(this_ip_addrs, modes.to_vec(), deadline).boxed();
+    let that_ping = multi_mode_ping_fastest(that_ip_addrs, modes.to_vec(), deadline).boxed();
 
     let which_faster = select(this_ping, that_ping).await;
 
@@ -175,9 +191,9 @@ async fn which_faster(
 async fn multi_mode_ping_fastest(
     ip_addrs: Vec<IpAddr>,
     modes: Vec<SpeedCheckMode>,
+    deadline: tokio::time::Instant,
 ) -> Option<(IpAddr, Duration)> {
     use crate::infra::ping::{PingOptions, ping_fastest};
-    let duration = Duration::from_millis(200);
     let ping_ops = PingOptions::default().with_timeout_secs(2);
 
     let mut fastest_ip = None;
@@ -185,25 +201,19 @@ async fn multi_mode_ping_fastest(
     for mode in &modes {
         let dests = mode.to_ping_addrs(&ip_addrs);
 
+        // 整体预算：所有模式共享同一个 deadline，而不是每种模式各等 200ms
         let ping_task = ping_fastest(dests, ping_ops).boxed();
-        let timeout_task = sleep(duration).boxed();
-        match futures_util::future::select(ping_task, timeout_task).await {
-            futures::future::Either::Left((ping_res, _)) => {
-                match ping_res {
-                    Ok(ping_out) => {
-                        // ping success
-                        let ip = ping_out.dest().ip_addr();
-                        let duration = ping_out.elapsed();
-                        fastest_ip = Some((ip, duration));
-                        break;
-                    }
-                    Err(_) => continue,
-                }
+        match tokio::time::timeout_at(deadline, ping_task).await {
+            Ok(Ok(ping_out)) => {
+                let ip = ping_out.dest().ip_addr();
+                let duration = ping_out.elapsed();
+                fastest_ip = Some((ip, duration));
+                break;
             }
-            futures::future::Either::Right((_, _)) => {
-                // timeout
-                continue;
-            }
+            // 该模式没测出结果，换下一个模式（仍受同一 deadline 约束）
+            Ok(Err(_)) => continue,
+            // 整体预算耗尽
+            Err(_) => break,
         }
     }
 
