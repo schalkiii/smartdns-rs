@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+### fix(client): 稳态不再强制 200ms socket 创建间隔（端到端延迟 200ms → 个位数毫秒）
+
+为规避 Windows `WSAENOBUFS` 加的**全局 socket 创建限速器**原先无条件生效：任意两次 socket 创建
+之间强制 sleep 200ms。每个查询都要新建 socket，因此每条未命中查询都固定多付约 200ms
+（实测上游 1–8ms，经过 smartdns 变成 200–400ms；日志却完全干净，没有任何 WARN）。
+
+改为**按需节流**：只有最近 60s 内真的出现过 `resource busy`（`WSAENOBUFS`/`ENOBUFS`）时才启用
+200ms 间隔，命中该错误即记录并进入节流窗口；稳态下直接返回。QUIC/H3 的同步限速器同样处理。
+
+验证（同一份配置、同一批上游，源码构建实例）：`www.github.com` A 211ms → **8ms**、
+AAAA → 9ms；`www.npmjs.com` → 2ms/7ms；`docs.rs` → 11ms/69ms。
+新增回归用例 `test_socket_rate_limiter_no_delay_when_healthy`（无资源耗尽时 5 次调用 < 100ms）；
+356 + 10 + 7 全绿，clippy 0，fmt 0。
+
 ### fix(dualstack): 空测速模式短路、等另一族加超时、测速改为整体预算
 
 - `speed-check-mode` 为空时（含未配置）直接放行：原先仍会并发查询另一族并白等，纯开销。

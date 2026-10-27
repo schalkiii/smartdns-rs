@@ -48,9 +48,19 @@ fn test_is_resource_busy_no_raw_error() {
     );
 }
 
+/// 三个限速器用例共享全局状态（资源耗尽窗口），串行执行避免互相干扰。
+static RATE_LIMIT_TEST_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+async fn lock_rate_limit_tests() -> tokio::sync::MutexGuard<'static, ()> {
+    RATE_LIMIT_TEST_GUARD.lock().await
+}
+
 /// 测试 socket 速率限制器确保创建间隔 >= 200ms
 #[tokio::test]
 async fn test_socket_rate_limiter_interval() {
+    let _guard = lock_rate_limit_tests().await;
+    // 节流只在最近出现过资源耗尽时启用
+    mark_resource_busy();
     let start = Instant::now();
     socket_rate_limit().await;
     let first = start.elapsed();
@@ -65,9 +75,28 @@ async fn test_socket_rate_limiter_interval() {
     );
 }
 
+/// 稳态下（最近没有资源耗尽错误）不得有任何强制间隔——这是端到端多付 200ms 的回归点。
+#[tokio::test]
+async fn test_socket_rate_limiter_no_delay_when_healthy() {
+    let _guard = lock_rate_limit_tests().await;
+    clear_resource_busy_for_test();
+
+    let start = Instant::now();
+    for _ in 0..5 {
+        socket_rate_limit().await;
+    }
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(100),
+        "无资源耗尽时应立即返回，实际耗时: {elapsed:?}"
+    );
+}
+
 /// 测试 socket 速率限制器并发调用时的行为
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_socket_rate_limiter_concurrent() {
+    let _guard = lock_rate_limit_tests().await;
+    mark_resource_busy();
     let start = Instant::now();
     let mut handles = Vec::new();
 

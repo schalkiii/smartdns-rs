@@ -503,8 +503,42 @@ fn socket_create_semaphore() -> Arc<Semaphore> {
 /// 信号量（SOCKET_CREATE_SEMAPHORE）作为辅助安全网，防止极端并发下的瞬时突发。
 static SOCKET_RATE_LIMITER: OnceLock<TokioMutex<Instant>> = OnceLock::new();
 
+/// 最近一次出现资源耗尽错误（WSAENOBUFS/ENOBUFS）的时刻（epoch 毫秒）。
+/// 节流只在「最近 60s 真的撞过资源耗尽」时启用；稳态下不再为每次 socket 创建强付 200ms。
+static LAST_RESOURCE_BUSY_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// 资源耗尽后维持节流的时间窗口。
+const RESOURCE_BUSY_WINDOW: Duration = Duration::from_secs(60);
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// 记录一次资源耗尽错误，启用随后的 socket 创建节流。
+fn mark_resource_busy() {
+    LAST_RESOURCE_BUSY_MS.store(now_ms(), std::sync::atomic::Ordering::Relaxed);
+}
+
+fn resource_busy_recently() -> bool {
+    let last = LAST_RESOURCE_BUSY_MS.load(std::sync::atomic::Ordering::Relaxed);
+    last != 0 && now_ms().saturating_sub(last) < RESOURCE_BUSY_WINDOW.as_millis() as u64
+}
+
+#[cfg(test)]
+fn clear_resource_busy_for_test() {
+    LAST_RESOURCE_BUSY_MS.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
 async fn socket_rate_limit() {
     let mutex = SOCKET_RATE_LIMITER.get_or_init(|| TokioMutex::new(Instant::now()));
+    // 稳态不节流：无条件 sleep 会让每条查询固定多付 200ms（上游 1–8ms → 端到端 200ms+）
+    if !resource_busy_recently() {
+        return;
+    }
+
     let mut last = mutex.lock().await;
     let elapsed = last.elapsed();
     // 两次 socket 创建之间至少间隔 200ms，给 OS 足够时间释放缓冲资源。
@@ -631,6 +665,7 @@ impl crate::libdns::proto::runtime::RuntimeProvider for TokioRuntimeProvider {
                 match result {
                     Ok(Ok(tcp)) => return Ok(tcp),
                     Ok(Err(err)) if is_resource_busy(&err) && retries > 0 => {
+                        mark_resource_busy();
                         retries -= 1;
                         log::debug!(
                             "[ns] TCP socket creation resource busy, retries left: {}, \
@@ -680,6 +715,7 @@ impl crate::libdns::proto::runtime::RuntimeProvider for TokioRuntimeProvider {
                 {
                     Ok(socket) => return Ok(socket),
                     Err(err) if is_resource_busy(&err) && retries > 0 => {
+                        mark_resource_busy();
                         retries -= 1;
                         log::debug!(
                             "[ns] socket creation resource busy, retries left: {}, \
@@ -722,6 +758,7 @@ impl QuicSocketBinder for TokioQuicSocketBinder {
             let socket = match next_random_udp(local_addr) {
                 Ok(s) => s,
                 Err(err) if is_resource_busy(&err) && retries > 0 => {
+                    mark_resource_busy();
                     retries -= 1;
                     log::debug!(
                         "[ns] QUIC socket bind resource busy, retries left: {retries}, \
@@ -827,6 +864,9 @@ impl proto::udp::DnsUdpSocket for UdpSocket {
 static QUIC_SOCKET_RATE_LIMITER: OnceLock<std::sync::Mutex<Instant>> = OnceLock::new();
 
 fn quic_socket_rate_limit() {
+    if !resource_busy_recently() {
+        return;
+    }
     let mut last = QUIC_SOCKET_RATE_LIMITER
         .get_or_init(|| std::sync::Mutex::new(Instant::now()))
         .lock()
