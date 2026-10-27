@@ -15,9 +15,10 @@ pub struct DnsDualStackIpSelectionMiddleware;
 /// 两族测速的**整体**预算（不是每族各 200ms）：超预算即视为测不出结果。
 const PING_BUDGET: Duration = Duration::from_millis(200);
 
-/// 等另一族应答的上限。上游单次查询超时是 5s，这里取 2s：正常 AAAA 远快于此，
-/// 只有链路异常时才会触发，避免「A 先到就无限等 AAAA」把尾延迟拖到秒级。
-const OTHER_FAMILY_WAIT_CAP: Duration = Duration::from_secs(2);
+/// 等另一族应答的上限。客户端 Happy Eyeballs 通常在 ~250ms 内就切到可用族，
+/// 等到 2s 没有意义；取 500ms：正常 AAAA 都在这之内，超时即按「对方更快」返回空，
+/// 既能兜住异常链路的尾延迟，也不会误杀健康但稍慢的 AAAA。
+const OTHER_FAMILY_WAIT_CAP: Duration = Duration::from_millis(500);
 
 #[async_trait::async_trait]
 impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError>
