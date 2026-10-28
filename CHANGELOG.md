@@ -4,6 +4,37 @@
 
 ## [Unreleased]
 
+## [v0.13.8] - 2026-10-28
+
+### fix(dns): 否定应答不再触发上游熔断（瞬时 SERVFAIL 与 1~8s 尾延迟的真正根因）
+
+**现象**：WebUI「上游查询耗时」均值 1120ms、未命中均值 1.7s；运行日志里 4003 条
+`no connections available` 以微秒级返回，其中 1169 条是前台客户端查询——客户端直接
+拿到 SERVFAIL。审计日志的耗时分位数同时给出「p50 = 21µs、p75 = 1.3ms，但有 10.6%
+的查询超过 1s」的双峰分布。
+
+**根因**：熔断器把上游的正常否定应答当成了失败。hickory 用 `ProtoErrorKind::NoRecordsFound`
+表达 NXDOMAIN / NODATA，类型上是个 `Err`，于是「域名不存在」也在累加连续失败计数；
+3 条就令健康上游冷却 30s。而 `fastest-response` 会把同一域名并行发给组内全部上游，
+所以一批不存在的域名会让三个上游**同步**冷却：整条链在 µs 级失败，或只剩最慢的一个
+上游可用（1~8s 尾延迟）。家庭网络里这类域名占比极高（IPv4-only 主机的 AAAA 查询、
+失效的 PT 站 tracker），因此该缺陷在真实流量下必然复现。
+
+- 新增 `dns_client::is_negative_answer`：`NoRecordsFound` 且 response_code 为
+  `NXDomain` / `NoError` 视为正常回答（清零失败计数、按成功计统计），错误本身仍原样
+  上抛，否定缓存行为不变；`ServFail` / `Refused` / 超时 / IO 错误仍计入熔断。
+- 新增熔断半开保护：`NameServerGroup::lookup` 发现整组上游都在冷却时清空计数，
+  放行一次真实探测，避免网络已恢复却被整个 30s 冷却窗口锁死。
+
+**验证**（三上游 debug 实例，19053/18083，修复前后同一负载对照）：连打 24 个唯一
+不存在域名，修复前仅 6 次到达上游、6 次全记为失败、42 条 `in cooldown, skipping`，
+第二批 12 条全部 µs 级 SERVFAIL；修复后 72 次上游查询、0 失败、0 冷却跳过。
+
+**测试**：新增 `test_negative_answer_is_not_an_upstream_failure`、
+`test_servfail_and_timeout_are_upstream_failures`；358 passed / 0 failed / 11 ignored，
+clippy 0 warning，fmt 0。README 与 README_zh-CN 的「瞬时 SERVFAIL」小节由「根因尚未定位」
+改写为根因 + 修复 + 实测数据。
+
 ## [v0.13.7] - 2026-10-28
 
 ### fix(client): 稳态不再强制 200ms socket 创建间隔（端到端延迟 200ms → 个位数毫秒）

@@ -89,6 +89,28 @@ fn is_busy(err: &ProtoError) -> bool {
     matches!(err.kind(), ProtoErrorKind::Busy)
 }
 
+/// 上游返回的否定应答（NXDOMAIN / NODATA）。
+///
+/// hickory 把这类应答转成 `ProtoErrorKind::NoRecordsFound`，因此在类型上是个
+/// `Err`，但它是上游**正常且正确**的回答：域名确实不存在，或该类型无记录。
+///
+/// 必须与"上游故障"区分开：家庭网络里否定应答占比极高（双栈客户端的 AAAA 查询、
+/// PT 站 tracker 域名等），若计入熔断失败计数，连续 3 个不存在的域名就会让健康
+/// 上游冷却 30s。实测后果：三个上游被同一批 NXDOMAIN 同步打进冷却，整条查询链
+/// 在 µs 级返回 `no connections available`（客户端拿到 SERVFAIL），或只剩最慢的
+/// 一个上游可用（尾延迟 1~8s）。
+fn is_negative_answer(err: &ProtoError) -> bool {
+    match err.kind() {
+        ProtoErrorKind::NoRecordsFound(no_records) => {
+            matches!(
+                no_records.response_code,
+                ResponseCode::NoError | ResponseCode::NXDomain
+            )
+        }
+        _ => false,
+    }
+}
+
 /// 检测 ProtoError 是否可重试（连接断开、资源耗尽等临时性错误）。
 ///
 /// 通过匹配 `ProtoErrorKind` 判断，避免对错误字符串/OS 码做脆弱嗅探。
@@ -505,6 +527,19 @@ mod name_server_group {
                 return Err(crate::libdns::proto::ProtoErrorKind::NoConnections.into());
             }
 
+            // 熔断半开保护：整组上游同时处于冷却时，冷却判断可能已经过期（网络恢复、
+            // 或此前的一批失败本是同一故障）。全部跳过会让客户端在整个冷却窗口内只拿到
+            // SERVFAIL，因此清空计数让本轮真实发一次探测；探测若再次失败会重新累计。
+            if self.servers.iter().all(|ns| ns.is_failing()) {
+                log::debug!(
+                    "[ns] all {} nameservers in cooldown, allowing probe",
+                    self.servers.len()
+                );
+                for ns in &self.servers {
+                    ns.allow_probe();
+                }
+            }
+
             let total = self.servers.len();
             let (tx, mut rx) = tokio::sync::mpsc::channel(total);
 
@@ -714,6 +749,11 @@ mod name_server {
             self.in_cooldown()
         }
 
+        /// 熔断半开：清零连续失败计数，使本上游立即重新参与查询（见 NameServerGroup::lookup）。
+        pub fn allow_probe(&self) {
+            self.fail_streak.store(0, Ordering::Relaxed);
+        }
+
         /// 关联的服务器配置快照。
         pub fn info(&self) -> &NameServerInfo {
             &self.info
@@ -867,9 +907,16 @@ mod name_server {
                         backoff_ms = (backoff_ms * 2).min(1000);
                     }
                     Err(err) => {
-                        // 非重试错误（含连接超时）：计入失败，触发熔断冷却。
-                        self.record_failure();
-                        self.record_failure_time(start.elapsed());
+                        // 非重试错误：否定应答算正常回答，其余（超时/SERVFAIL/IO 错误）
+                        // 计入失败并触发熔断冷却。
+                        let took = start.elapsed();
+                        if is_negative_answer(&err) {
+                            self.record_success();
+                            self.record_success_time(took);
+                        } else {
+                            self.record_failure();
+                            self.record_failure_time(took);
+                        }
                         return Err(err.into());
                     }
                 }
@@ -1428,6 +1475,34 @@ mod tests {
             .await;
 
         assert!(results.into_iter().all(|r| r));
+    }
+
+    fn no_records_err(code: ResponseCode) -> ProtoError {
+        use crate::libdns::proto::NoRecords;
+        let query = Query::query(
+            Name::from_ascii("nonexistent.example.com.").unwrap(),
+            RecordType::A,
+        );
+        ProtoError::from(ProtoErrorKind::NoRecordsFound(NoRecords::new(query, code)))
+    }
+
+    #[test]
+    fn test_negative_answer_is_not_an_upstream_failure() {
+        // NXDOMAIN（域名不存在）与 NODATA（该类型无记录）都是上游的正常回答，
+        // 绝不能计入熔断失败计数，否则一批不存在的域名就会打死健康上游。
+        assert!(is_negative_answer(&no_records_err(ResponseCode::NXDomain)));
+        assert!(is_negative_answer(&no_records_err(ResponseCode::NoError)));
+    }
+
+    #[test]
+    fn test_servfail_and_timeout_are_upstream_failures() {
+        // SERVFAIL/REFUSED 说明上游没能完成解析，超时说明链路故障：仍需触发熔断。
+        assert!(!is_negative_answer(&no_records_err(ResponseCode::ServFail)));
+        assert!(!is_negative_answer(&no_records_err(ResponseCode::Refused)));
+        assert!(!is_negative_answer(&ProtoError::from(
+            ProtoErrorKind::Timeout
+        )));
+        assert!(!is_negative_answer(&ProtoError::from(ProtoErrorKind::Busy)));
     }
 
     // #[test]

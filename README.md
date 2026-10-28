@@ -375,7 +375,11 @@ Use `log-level debug` to see detailed retry and error information.
 
 **What it is not**: it is not an empty server group — that path logs `no available nameserver found for <name>` at ERROR level, which is absent when this happens. It is also not a version regression: the same random name failed with `rcode=2` on both v0.13.2 and v0.13.5 running side by side on this machine, and over 16 uncached real domains v0.13.5 resolved 13 while v0.13.2 resolved 10.
 
-**Status**: root cause not isolated yet. The error is raised by this crate, not by hickory — `ProtoErrorKind::NoConnections` appears in `src/dns_client.rs` (empty group short-circuit and the fan-out fall-through) and in `src/dns_mw_ns.rs` (IP-strategy fallback with no result at all), and the sub-millisecond timing rules out any completed upstream round-trip.
+**Root cause — fixed in v0.13.8**: the upstream circuit breaker was counting *legitimate negative answers* as failures. hickory returns NXDOMAIN and NODATA as `ProtoErrorKind::NoRecordsFound`, which is a typed `Err`, so every "this name does not exist" answer incremented the failure streak. Three in a row put a perfectly healthy server into a 30-second cooldown. Because `response-mode fastest-response` fans the same name out to every server in the group, one burst of non-existent names (AAAA queries for IPv4-only hosts, dead tracker domains) parks all of them at once, and the whole chain then fails in microseconds instead of resolving.
+
+**The fix**: `dns_client::is_negative_answer` treats `NoRecordsFound` carrying `NXDomain` or `NoError` as a normal answer — it clears the streak and counts as a success, while `ServFail`, `Refused` and timeouts still trip the breaker. Additionally, if every server in a group is cooling down, the group now clears the counters and lets one real probe through (half-open), so a network that has already recovered is not locked out for the rest of the cooldown window.
+
+**Measured**: on a debug instance with three upstreams, a run of 24 unique non-existent names reached an upstream only 6 times before the fix, all 6 were recorded as failures, 42 lookups were skipped as `in cooldown, skipping`, and the second batch of 12 failed instantly with SERVFAIL. The same load after the fix issued 72 upstream queries with 0 failures and 0 cooldown skips.
 
 ## Acknowledgments !!!
 

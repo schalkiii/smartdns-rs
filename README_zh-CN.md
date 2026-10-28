@@ -374,7 +374,11 @@ sudo ./target/release/smartdns run -c ./etc/smartdns/smartdns.conf
 
 **可以排除的原因**：不是上游组为空——那种路径会在 ERROR 级别打印 `no available nameserver found for <域名>`，出现本症状时日志里并没有它；也不是版本回归——同一台机器上并排跑 v0.13.2 与 v0.13.5，把同一个随机域名各打一次，两边都返回 `rcode=2`；16 个未缓存真实域名下 v0.13.5 成功 13 个、v0.13.2 成功 10 个。
 
-**当前状态**：根因尚未定位。这个错误由本项目代码抛出而非 hickory：`ProtoErrorKind::NoConnections` 出现在 `src/dns_client.rs`（上游组为空的短路返回、以及并发 fan-out 的兜底分支）和 `src/dns_mw_ns.rs`（IP 策略回退时既无成功也无失败结果），而亚毫秒级耗时说明并没有完成任何一次上游往返。
+**根因（v0.13.8 已修复）**：熔断器把上游的**正常否定应答**当成了失败。hickory 把 NXDOMAIN 与 NODATA 以 `ProtoErrorKind::NoRecordsFound` 返回，类型上是个 `Err`，于是每一条「这个域名不存在」的正常回答都在累加连续失败计数；连续 3 条就会把一个完全健康的上游打进 30s 冷却。又因为 `response-mode fastest-response` 会把同一个域名并行发给组内所有上游，一批不存在的域名（IPv4-only 主机的 AAAA 查询、已失效的 tracker 域名）会让三个上游**同步**进入冷却，整条查询链随即在微秒级失败，而不是完成解析。
+
+**修复方式**：`dns_client::is_negative_answer` 将携带 `NXDomain` / `NoError` 的 `NoRecordsFound` 视为正常回答——清零连续失败计数并按成功计入统计；`ServFail`、`Refused` 与超时仍然照常触发熔断。此外，当整组上游都处于冷却时，上游组会清空计数放行一次真实探测（熔断半开），避免网络早已恢复却被整个冷却窗口锁死。
+
+**实测数据**：三上游的 debug 实例上连打 24 个唯一的不存在域名，修复前只有 6 次真正到达上游、6 次全部记为失败、42 次以 `in cooldown, skipping` 被跳过，第二批 12 条全部微秒级 SERVFAIL；修复后同样负载发出 72 次上游查询，0 次失败、0 次冷却跳过。
 
 ## 致谢 !!!
 
