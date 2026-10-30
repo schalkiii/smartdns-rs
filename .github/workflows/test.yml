@@ -21,7 +21,10 @@ jobs:
       matrix:
         include:
           - target: x86_64-apple-darwin
-            os: macos-latest
+            # 固定 macos-14：macos-latest 在 2026-10-30 连续一小时分配不到 runner
+            # （任务空转 15 分钟后被取消，runner_id=0、steps=0）。此前 macos-latest
+            # 同样解析到 Apple Silicon，x86_64 测试本就跑在 Rosetta 上，行为不变。
+            os: macos-14
           - target: x86_64-pc-windows-msvc
             os: windows-latest
           - target: x86_64-unknown-linux-musl
