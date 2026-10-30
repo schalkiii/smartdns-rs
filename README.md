@@ -277,6 +277,20 @@ dig @127.0.0.1 CH TXT id.server +short
 
 SmartDNS-rs includes an embedded web dashboard accessible over HTTP. It provides real-time monitoring of DNS query statistics, cache inspection, upstream server status, and rule management — all in a single-page tabbed interface.
 
+### Screenshots
+
+System overview — uptime, cache hit rate, and the four timing metrics (combined, cache hit, upstream, background prefetch):
+
+![System overview](docs/images/webui-overview.png)
+
+Upstream servers — protocol, status, query counts, success rate and average latency per server:
+
+![Upstream servers](docs/images/webui-upstreams.png)
+
+Cache management — cache capacity, entry search and flush:
+
+![Cache management](docs/images/webui-cache.png)
+
 ### Enabling the Dashboard
 
 1. **Enable the `web-ui` feature at build time** (already enabled by default):

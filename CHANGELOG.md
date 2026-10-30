@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### docs: README 增加 Web UI 界面截图
+
+- 新增 `docs/images/webui-overview.png`、`webui-upstreams.png`、`webui-cache.png` 三张实机截图；
+  中英文 README 的 Web UI 章节各加「界面截图 / Screenshots」小节。
+
 ## [v0.13.8] - 2026-10-28
 
 ### fix(dns): 否定应答不再触发上游熔断（瞬时 SERVFAIL 与 1~8s 尾延迟的真正根因）

@@ -278,6 +278,20 @@ dig @127.0.0.1 CH TXT id.server +short
 
 SmartDNS-rs 内嵌 Web 仪表盘，可通过 HTTP 访问。它以单页面标签页界面提供 DNS 查询统计、缓存检查、上游服务器状态与规则管理的实时监控。
 
+### 界面截图
+
+系统概览——运行时间、缓存命中率，以及四项耗时指标（综合 / 缓存命中 / 上游查询 / 后台预取）：
+
+![系统概览](docs/images/webui-overview.png)
+
+上游服务器——每个上游的协议、状态、查询数、成功率与平均耗时：
+
+![上游服务器](docs/images/webui-upstreams.png)
+
+缓存管理——缓存容量、条目搜索与清空：
+
+![缓存管理](docs/images/webui-cache.png)
+
 ### 启用仪表盘
 
 1. **构建时启用 `web-ui` 特性**（默认已启用）：
