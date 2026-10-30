@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### ci: Test 工作流不再重复占用 macOS runner
+
+一次 push 会同时排 `test`、`cleanliness`、`compatibility` 三个 macOS 任务；macOS runner 抢不到时
+任务空转 15 分钟被取消（`runner_id=0`、`steps=0`），整个 run 判失败但没有任何代码问题。
+`compatibility` 里的两个 darwin 目标已移除——它们的编译与打包本来就由 `build.yml` 在发版时覆盖，
+Test 里保留 `test x86_64-apple-darwin` 验证 macOS 运行时行为。
+
 ## [v0.13.9] - 2026-10-30
 
 ### fix(ns): 熔断跳过的上游不再被当成结论（健康上游被丢弃 / 否定应答被 SERVFAIL 覆盖）

@@ -109,12 +109,10 @@ jobs:
           # - target: i686-pc-windows-gnu  # error: linker `i686-w64-mingw32-gcc` not found
           #   os: windows-latest
           #   archive: zip
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            archive: zip
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            archive: zip
+          # macOS 目标不在此重复打包：一次 push 若同时排 test + cleanliness + compatibility
+          # 三个 macOS 任务，runner 抢不到时空转 15 分钟就被取消（runner_id=0、steps=0），
+          # 整个 run 判失败。两个 darwin 目标的编译与打包由 build.yml 在发版时验证，
+          # 这里保留上面的 test x86_64-apple-darwin 覆盖 macOS 运行时行为。
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             archive: tar.gz tar.xz tar.zst
