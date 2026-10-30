@@ -66,11 +66,14 @@ jobs:
           # `i686-w64-mingw32-gcc`），且 wix.wxs 的 Package/Component 写死，GNU 安装包会与
           # MSVC 版共用同一 UpgradeCode 而互相覆盖安装。
           # ---------------- macOS ----------------
+          # 显式指定 macos-14（Apple Silicon）：macos-latest 的调度池在 2026-10-30 出现过
+          # 连续 1 小时分配不到 runner（任务空转 15 分钟后被取消，runner_id=0、steps=0）。
+          # 两个 darwin 目标都在 ARM 上构建（x86_64 为交叉编译），与之前行为一致。
           - target: x86_64-apple-darwin
-            os: macos-latest
+            os: macos-14
             archive: zip
           - target: aarch64-apple-darwin
-            os: macos-latest
+            os: macos-14
             archive: zip
           # ---------------- Linux (glibc) ----------------
           - target: x86_64-unknown-linux-gnu
