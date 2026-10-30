@@ -78,6 +78,12 @@ const NS_FAIL_THRESHOLD: u32 = 3;
 /// 熔断冷却时长。冷却期内该上游被整体跳过，冷却结束后才允许再试一次。
 const NS_COOLDOWN: Duration = Duration::from_secs(30);
 
+/// 熔断半开探测的最小间隔。
+///
+/// 整组上游同时冷却时，每 `NS_PROBE_INTERVAL` 才放行一次真实探测：既能在网络恢复后
+/// 5s 内自愈，又不会让上游长时间不可用时每条查询都白等一个 `NS_QUERY_TIMEOUT`。
+const NS_PROBE_INTERVAL: Duration = Duration::from_secs(5);
+
 /// 检测 ProtoError 是否为 `Busy`（上游多路复用器瞬时过载）。
 ///
 /// Busy 与连接断开/资源耗尽不同：它是“当前槽位已满”的瞬时信号。
@@ -491,6 +497,36 @@ mod name_server_group {
             self.servers.is_empty()
         }
 
+        /// 熔断半开：整组上游都在冷却时清空计数，让本轮真实探测一次。
+        ///
+        /// 冷却只该省掉"明知会超时"的空耗，不该把整组锁死：整组同时冷却通常意味着
+        /// 那批失败来自同一个瞬时故障，必须真实探测才能及时恢复。否则网络恢复后
+        /// 客户端还要在整个冷却窗口里继续吃 SERVFAIL。
+        ///
+        /// 探测按 `NS_PROBE_INTERVAL` 限速：上游长时间不可用时若每条查询都去探测，
+        /// 每条都要白等一个 `NS_QUERY_TIMEOUT`。
+        ///
+        /// 同时供 `lookup_ip` 使用——它按单个上游并发查询，不经过 `lookup`。
+        pub(crate) fn allow_probe_if_all_cooling(&self) {
+            if self.servers.is_empty() || !self.servers.iter().all(|ns| ns.is_failing()) {
+                return;
+            }
+            if self
+                .servers
+                .iter()
+                .any(|ns| ns.since_last_failure() < NS_PROBE_INTERVAL)
+            {
+                return;
+            }
+            log::debug!(
+                "[ns] all {} nameservers in cooldown, allowing probe",
+                self.servers.len()
+            );
+            for ns in &self.servers {
+                ns.allow_probe();
+            }
+        }
+
         fn options(&self) -> &Arc<ResolverOpts> {
             &self.resolver_opts
         }
@@ -530,15 +566,7 @@ mod name_server_group {
             // 熔断半开保护：整组上游同时处于冷却时，冷却判断可能已经过期（网络恢复、
             // 或此前的一批失败本是同一故障）。全部跳过会让客户端在整个冷却窗口内只拿到
             // SERVFAIL，因此清空计数让本轮真实发一次探测；探测若再次失败会重新累计。
-            if self.servers.iter().all(|ns| ns.is_failing()) {
-                log::debug!(
-                    "[ns] all {} nameservers in cooldown, allowing probe",
-                    self.servers.len()
-                );
-                for ns in &self.servers {
-                    ns.allow_probe();
-                }
-            }
+            self.allow_probe_if_all_cooling();
 
             let total = self.servers.len();
             let (tx, mut rx) = tokio::sync::mpsc::channel(total);
@@ -752,6 +780,15 @@ mod name_server {
         /// 熔断半开：清零连续失败计数，使本上游立即重新参与查询（见 NameServerGroup::lookup）。
         pub fn allow_probe(&self) {
             self.fail_streak.store(0, Ordering::Relaxed);
+        }
+
+        /// 距最近一次失败的时长；从未失败时返回 `Duration::MAX`。
+        pub fn since_last_failure(&self) -> Duration {
+            self.last_failure
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .map(|t| t.elapsed())
+                .unwrap_or(Duration::MAX)
         }
 
         /// 关联的服务器配置快照。

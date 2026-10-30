@@ -4,6 +4,37 @@
 
 ## [Unreleased]
 
+## [v0.13.9] - 2026-10-30
+
+### fix(ns): 熔断跳过的上游不再被当成结论（健康上游被丢弃 / 否定应答被 SERVFAIL 覆盖）
+
+v0.13.8 修掉了否定应答误触发熔断，但实测残留仍有 µs 级 `no connections available`（49 小时 765 条）。
+定位到 `lookup_ip_fastest_response` 的提前收尾逻辑：
+
+- 原实现把「两个上游报同样的错」当作提前结束条件。熔断跳过返回的也是 `NoConnections`，
+  于是两个处于冷却的上游就能让整条查询在 µs 级失败，并**丢掉仍在查询中的健康上游**；
+  即使健康上游几毫秒后就能给出答案。
+- 同样地，先到的有效否定应答（NXDOMAIN / NODATA）会被后到的 `NoConnections` 覆盖成 SERVFAIL，
+  否定缓存也因此拿不到结果。
+
+修复：
+- `NoConnections` 不参与「结论一致」的提前收尾（`LookupError::is_no_connections`）；
+- 否定应答优先于上游错误返回，只有全是错误时才回 SERVFAIL。
+- 熔断半开补到 A/AAAA 主路径：`lookup_ip` 按单个上游并发查询，不经过
+  `NameServerGroup::lookup`，此前完全没有半开保护；同时按 `NS_PROBE_INTERVAL`(5s) 限速探测，
+  避免上游长时间不可用时每条查询都白等一个 `NS_QUERY_TIMEOUT`。
+
+验证（debug 实例，双死一活三上游）：两个上游熔断后，8 个真实域名仍全部由健康上游在 **8–11ms**
+解析（修复前同场景为 µs 级 SERVFAIL）；三上游全死时大部分查询 2–3ms 快速失败、每 ~5s 放行一次
+~3s 真实探测，且三个上游都真正参与查询（此前第三个会被提前返回直接丢掉，`query_total` 恒为 0）。
+
+### test: 限速器用例改为注入 busy 标志
+
+`test_socket_rate_limiter_interval` 在全量套件并发运行时偶发失败：用例依赖进程级
+「资源耗尽」标记，其它用例并发调用 `mark_resource_busy`/清理逻辑会改变它。
+`socket_rate_limit_with(busy)` 把标志改为参数注入，三条用例不再读写全局状态；
+359 passed / 0 failed / 11 ignored，clippy 0，fmt 0。
+
 ### docs: README 增加 Web UI 界面截图
 
 - 新增 `docs/images/webui-overview.png`、`webui-upstreams.png`、`webui-cache.png` 三张实机截图；

@@ -255,6 +255,10 @@ async fn lookup_ip(
         return Err(ProtoErrorKind::NoConnections.into());
     }
 
+    // 本函数按单个上游并发查询，不经过 NameServerGroup::lookup，因此要在这里
+    // 做同样的熔断半开：否则整组冷却时每条 A/AAAA 查询都会在 µs 级失败。
+    server.allow_probe_if_all_cooling();
+
     // 速度检查忽略逻辑
     let response_strategy = if options.no_speed_check || options.speed_check_mode.is_none() {
         FastestResponse
@@ -452,34 +456,37 @@ async fn lookup_ip_fastest_response(
         .map(|ns| async { per_nameserver_lookup_ip(ns, name.clone(), options).await }.boxed())
         .collect();
 
+    let mut last_ok: Option<DnsResponse> = None;
     let mut last_error = None;
 
     while let Some(res) = events.next().await {
-        match &res {
+        match res {
+            // 最快的正常应答直接返回
             Ok(response) if response.response_code() == ResponseCode::NoError => {
-                return IpStrategyResult::DirectResponse(Box::new(res.unwrap()));
+                return IpStrategyResult::DirectResponse(Box::new(response));
             }
-            _ => {}
-        }
-
-        if events.is_empty() {
-            return match res {
-                Ok(r) => IpStrategyResult::DirectResponse(Box::new(r)),
-                Err(e) => IpStrategyResult::Error(e),
-            };
-        }
-
-        if let Err(ref err) = res {
-            if matches!(last_error, Some(ref e) if e == err) {
-                return IpStrategyResult::Error(res.unwrap_err());
+            // NXDOMAIN / NODATA 同样是有效回答，先记下，不能被其它上游的错误掩盖
+            Ok(response) => last_ok = Some(response),
+            Err(err) => {
+                // 两个上游给出相同的错误即可提前收尾，省下等待剩余上游的时间。
+                // 但 NoConnections 例外：它只表示该上游被熔断跳过，不是对域名的结论，
+                // 用它提前返回会把仍在查询中的健康上游一起丢掉，整条查询变成 µs 级失败。
+                if !err.is_no_connections() && matches!(last_error, Some(ref e) if e == &err) {
+                    return match last_ok {
+                        Some(ok) => IpStrategyResult::DirectResponse(Box::new(ok)),
+                        None => IpStrategyResult::Error(err),
+                    };
+                }
+                last_error = Some(err);
             }
-            last_error = Some(err.clone());
         }
     }
 
-    match last_error {
-        Some(err) => IpStrategyResult::Error(err),
-        None => IpStrategyResult::Error(ProtoErrorKind::NoConnections.into()),
+    match (last_ok, last_error) {
+        // 有效否定应答优先于上游错误：至少能告诉客户端域名确实不存在
+        (Some(ok), _) => IpStrategyResult::DirectResponse(Box::new(ok)),
+        (None, Some(err)) => IpStrategyResult::Error(err),
+        (None, None) => IpStrategyResult::Error(ProtoErrorKind::NoConnections.into()),
     }
 }
 

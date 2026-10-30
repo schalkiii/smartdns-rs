@@ -527,18 +527,19 @@ fn resource_busy_recently() -> bool {
     last != 0 && now_ms().saturating_sub(last) < RESOURCE_BUSY_WINDOW.as_millis() as u64
 }
 
-#[cfg(test)]
-fn clear_resource_busy_for_test() {
-    LAST_RESOURCE_BUSY_MS.store(0, std::sync::atomic::Ordering::Relaxed);
+async fn socket_rate_limit() {
+    socket_rate_limit_with(resource_busy_recently()).await;
 }
 
-async fn socket_rate_limit() {
-    let mutex = SOCKET_RATE_LIMITER.get_or_init(|| TokioMutex::new(Instant::now()));
+/// `busy` 由调用方注入：测试稳态/节流两条路径时不必读写进程级全局状态，
+/// 否则与其它用例并发运行时结果不可复现（资源耗尽标记是全局的）。
+async fn socket_rate_limit_with(busy: bool) {
     // 稳态不节流：无条件 sleep 会让每条查询固定多付 200ms（上游 1–8ms → 端到端 200ms+）
-    if !resource_busy_recently() {
+    if !busy {
         return;
     }
 
+    let mutex = SOCKET_RATE_LIMITER.get_or_init(|| TokioMutex::new(Instant::now()));
     let mut last = mutex.lock().await;
     let elapsed = last.elapsed();
     // 两次 socket 创建之间至少间隔 200ms，给 OS 足够时间释放缓冲资源。

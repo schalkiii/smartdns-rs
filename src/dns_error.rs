@@ -51,6 +51,15 @@ impl LookupError {
         }
     }
 
+    /// 错误是否表示「该上游当前不可用」（被熔断跳过），而不是对查询本身的结论。
+    ///
+    /// 这类结果不能当作上游对域名的判断：它既不代表域名不存在，也不能用来
+    /// 判定「两个上游结论一致」而提前结束查询。
+    #[inline]
+    pub fn is_no_connections(&self) -> bool {
+        matches!(self, Self::Proto(err) if matches!(err.kind(), ProtoErrorKind::NoConnections))
+    }
+
     #[inline]
     pub fn is_soa(&self) -> bool {
         if let Self::Proto(err) = self
@@ -179,5 +188,26 @@ mod tests {
         let kind = ProtoErrorKind::Message("test error");
         let err: LookupError = kind.into();
         assert!(matches!(err, LookupError::Proto(_)));
+    }
+
+    #[test]
+    fn test_is_no_connections_only_matches_cooldown_skip() {
+        // 熔断跳过是「上游当前不可用」，不能当作对域名的结论
+        let skipped: LookupError = ProtoErrorKind::NoConnections.into();
+        assert!(skipped.is_no_connections());
+
+        // 超时与真实否定应答都不是这个语义
+        let timeout: LookupError = ProtoErrorKind::Timeout.into();
+        assert!(!timeout.is_no_connections());
+
+        let no_records: LookupError = ProtoErrorKind::NoRecordsFound(NoRecords::new(
+            Query::query(
+                Name::from_ascii("nonexistent.example.com.").unwrap(),
+                RecordType::A,
+            ),
+            ResponseCode::NXDomain,
+        ))
+        .into();
+        assert!(!no_records.is_no_connections());
     }
 }
