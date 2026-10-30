@@ -429,6 +429,12 @@ Notes on the matrix:
 - Asset names are `smartdns-<target>-<version>.<ext>`; `<version>` comes from
   `.github/actions/sanitize-label`, which every job that names or downloads artifacts recomputes
   from the same inputs — keep those call sites in sync.
+- **Both darwin targets run on `macos-15-intel`, never `macos-latest`.** On 2026-10-30 the
+  `macos-latest` label (now macos-26) and the Apple Silicon pool (`macos-14`) handed out no runners
+  for an hour: jobs sat queued with `runner_id=0`, `steps=0` until GitHub cancelled them, which
+  failed the Test run and made the release job skip. `macos-15-intel` scheduled within a minute;
+  aarch64 is cross-compiled there. Keep macOS jobs to one per push (the Test workflow's
+  `compatibility` matrix deliberately omits darwin) because macOS slots are the scarcest resource.
 
 ---
 
