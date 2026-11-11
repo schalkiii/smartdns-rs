@@ -54,7 +54,7 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for AddressMiddle
     ) -> Result<DnsResponse, DnsError> {
         let query_type = req.query().query_type();
 
-        if let Some(rdatas) = handle_rule_addr(query_type, ctx) {
+        if let Some(rdatas) = handle_rule_addr(query_type, req.query().name(), ctx) {
             let local_ttl = ctx.cfg().local_ttl();
 
             let query = req.query().original().clone();
@@ -143,7 +143,11 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for AddressMiddle
     }
 }
 
-fn handle_rule_addr(query_type: RecordType, ctx: &DnsContext) -> Option<Vec<RData>> {
+fn handle_rule_addr(
+    query_type: RecordType,
+    query_name: &Name,
+    ctx: &DnsContext,
+) -> Option<Vec<RData>> {
     use RecordType::{A, AAAA, HTTPS};
 
     let cfg = ctx.cfg();
@@ -174,6 +178,11 @@ fn handle_rule_addr(query_type: RecordType, ctx: &DnsContext) -> Option<Vec<RDat
 
     // skip address rule.
     if server_opts.no_rule_addr() || !query_type.is_ip_addr() {
+        return None;
+    }
+
+    // adblock 例外域名（@@||domain^）：优先于任何 address 拦截规则，直接放行
+    if cfg.is_allow_domain(query_name) {
         return None;
     }
 

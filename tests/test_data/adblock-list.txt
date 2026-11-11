@@ -1,0 +1,13 @@
+! Title: Test Adblock List
+! Homepage: https://example.org/test
+!
+||ads.example.com^
+@@||allowed.example.com^
+||tracker.cn^$third-party
+baredomain.net^
+0.0.0.0 hosts-blocked.org
+127.0.0.1 hosts-a.org hosts-b.org
+##.ad-banner
+cosmetic.example.com##div.ad
+/regexPattern/
+|http://urlrule.example.com/

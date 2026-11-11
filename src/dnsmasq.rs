@@ -420,8 +420,7 @@ fn read_lease_files(
     let mut read_any = false;
     if let Some(path) = primary {
         read_any |=
-            collect_lease_file(path, zone, false, &mut name_map, &mut ip_map, &mut mac_map)
-                .is_ok();
+            collect_lease_file(path, zone, false, &mut name_map, &mut ip_map, &mut mac_map).is_ok();
     }
     if let Some(path) = odhcpd {
         read_any |=
@@ -627,7 +626,7 @@ impl NeighborStore {
         #[cfg(windows)]
         {
             let status = std::process::Command::new("cmd")
-                .args(&["/c", "exit", "0"])
+                .args(["/c", "exit", "0"])
                 .status()
                 .unwrap();
             Ok(std::process::Output {
@@ -1345,10 +1344,10 @@ mod tests {
 
         // Don't initialize, just test empty cache
         let ipv6: IpAddr = "2402:4e00:1013:e500:0:9671:f018:4947".parse().unwrap();
-        let _rdata = store.reverse_lookup(&ipv6);
+        let rdata = store.reverse_lookup(&ipv6);
 
-        // Should return None for empty cache
-        assert!(true); // Just verifying it doesn't panic
+        // Empty cache should return None without panicking
+        assert!(rdata.is_none());
     }
 
     #[test]

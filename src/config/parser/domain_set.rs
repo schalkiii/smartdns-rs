@@ -139,7 +139,11 @@ impl NomParser for DomainSetHttpProvider {
 impl NomParser for DomainSetContentType {
     fn parse(input: &str) -> IResult<&str, Self> {
         use DomainSetContentType::*;
-        alt((value(List, tag_no_case("list")),)).parse(input)
+        alt((
+            value(List, tag_no_case("list")),
+            value(Adblock, tag_no_case("adblock")),
+        ))
+        .parse(input)
     }
 }
 
@@ -205,6 +209,34 @@ mod tests {
                     name: "set".to_string(),
                     file: PathBuf::from("/path/to/list"),
                     content_type: Default::default(),
+                })
+            ))
+        );
+    }
+
+    #[test]
+    fn test_parse_adblock_provider() {
+        assert_eq!(
+            DomainSetProvider::parse("-type adblock -name ads -u https://example.com/easylist.txt"),
+            Ok((
+                "",
+                DomainSetProvider::Http(DomainSetHttpProvider {
+                    name: "ads".to_string(),
+                    url: Url::parse("https://example.com/easylist.txt").unwrap(),
+                    interval: None,
+                    content_type: DomainSetContentType::Adblock,
+                })
+            ))
+        );
+
+        assert_eq!(
+            DomainSetProvider::parse("-t adblock -n ads -f /path/to/adblock.txt"),
+            Ok((
+                "",
+                DomainSetProvider::File(DomainSetFileProvider {
+                    name: "ads".to_string(),
+                    file: PathBuf::from("/path/to/adblock.txt"),
+                    content_type: DomainSetContentType::Adblock,
                 })
             ))
         );

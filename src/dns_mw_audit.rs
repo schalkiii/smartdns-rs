@@ -119,9 +119,7 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsAuditMiddl
 
         // 无审计消费者时接收端已 drop，发送必然失败：跳过发送，避免每请求一次
         // try_send + warn 日志的开销。
-        if self.audit_output_enabled
-            && self.audit_sender.try_send(audit).is_err()
-        {
+        if self.audit_output_enabled && self.audit_sender.try_send(audit).is_err() {
             warn!("audit queue full, dropping audit record");
         }
 
@@ -245,11 +243,9 @@ pub struct DnsAuditRecord {
 
 impl DnsAuditRecord {
     fn fmt_result(&self) -> &str {
-        self.result_detail.as_deref().unwrap_or(if self.result_ok {
-            ""
-        } else {
-            "query failed"
-        })
+        self.result_detail
+            .as_deref()
+            .unwrap_or(if self.result_ok { "" } else { "query failed" })
     }
 
     fn to_string_without_date(&self) -> String {
@@ -371,11 +367,7 @@ fn record_audit_to_file(
                 audit.query.query_type().to_string().as_str(),
                 format!("{:?}", audit.elapsed).as_str(),
                 format!("{:?}", audit.speed).as_str(),
-                if audit.result_ok {
-                    "success"
-                } else {
-                    "failed"
-                },
+                if audit.result_ok { "success" } else { "failed" },
                 audit.fmt_result(),
                 format!("{:?}", audit.lookup_source).as_str(),
             ])?;

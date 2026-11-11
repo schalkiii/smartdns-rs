@@ -60,6 +60,9 @@ pub struct RuntimeConfig {
     ignore_ip: Arc<IpSet>,
 
     ip_alias: Arc<IpMap<Arc<[IpAddr]>>>,
+
+    /// adblock 订阅的例外集（`@@||domain^`）索引：命中即放行，不应用 address 拦截。
+    allow_domain_map: crate::collections::DomainMap<()>,
 }
 
 impl RuntimeConfig {
@@ -837,6 +840,13 @@ impl RuntimeConfig {
             .cloned()
     }
 
+    /// adblock 例外域名查询（`@@||domain^`）：命中返回 true，表示该域名
+    /// 豁免 address 拦截规则，直接放行走上游解析。
+    #[inline]
+    pub fn is_allow_domain(&self, domain: &Name) -> bool {
+        !self.allow_domain_map.is_empty() && self.allow_domain_map.contains(domain)
+    }
+
     fn get_server_group(&self, group: &str) -> Vec<&NameServerInfo> {
         if group == DEFAULT_GROUP {
             self.servers()
@@ -961,6 +971,7 @@ impl RuntimeConfigBuilder {
         }
 
         let mut domain_sets: HashMap<String, HashSet<WildcardName>> = HashMap::new();
+        let mut allow_domain_map = crate::collections::DomainMap::new();
 
         for (set_name, providers) in &cfg.domain_set_providers {
             let set = domain_sets.entry(set_name.to_string()).or_default();
@@ -972,6 +983,19 @@ impl RuntimeConfigBuilder {
                     }
                     Err(err) => {
                         log::error!("DoaminSet load failed {} {}", p.name(), err);
+                    }
+                }
+                // adblock 例外集（@@||domain^）：拦截判断前查询，命中即放行
+                match p.get_allow_domain_set() {
+                    Ok(a) if !a.is_empty() => {
+                        log::info!("DoaminSet load {} allow records into {}", a.len(), p.name());
+                        for name in a {
+                            allow_domain_map.insert(name, ());
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(err) => {
+                        log::error!("DoaminSet allow load failed {} {}", p.name(), err);
                     }
                 }
             }
@@ -1103,6 +1127,7 @@ impl RuntimeConfigBuilder {
             ignore_ip,
             ip_alias,
             proxy_servers: Arc::new(proxy_servers),
+            allow_domain_map,
         })
     }
 }
@@ -2162,6 +2187,52 @@ mod tests {
         assert!(!domain_set.contains(&"ads2c.cn".parse().unwrap()));
         // assert!(domain_set.is_match(&Name::from_str("ads3.net").unwrap().into()));
         // assert!(domain_set.is_match(&Name::from_str("q.ads3.net").unwrap().into()));
+    }
+
+    /// adblock 订阅端到端：block 集进 domain_sets（被 address 规则消费）、
+    /// @@ 例外集进 allow_domain_map（拦截判断前放行）
+    #[test]
+    fn test_adblock_domain_set() {
+        let cfg = RuntimeConfig::builder()
+            .with_conf_file("tests/test_data/c_adblock.conf")
+            .build()
+            .unwrap();
+
+        // block 集：||domain^、裸域名、$修饰符行、hosts 行全部收录
+        let domain_set = cfg
+            .domain_set_providers
+            .get("ads")
+            .map(|s| s.as_slice())
+            .unwrap_or_default()
+            .iter()
+            .flat_map(|p| p.get_domain_set().unwrap_or_default())
+            .collect::<crate::collections::DomainSet>();
+
+        let w = |s: &str| -> crate::config::WildcardName { s.parse().unwrap() };
+        assert!(domain_set.contains(&w("ads.example.com")));
+        assert!(domain_set.contains(&w("tracker.cn")));
+        assert!(domain_set.contains(&w("baredomain.net")));
+        assert!(domain_set.contains(&w("hosts-blocked.org")));
+        assert!(domain_set.contains(&w("hosts-a.org")));
+        assert!(domain_set.contains(&w("hosts-b.org")));
+        // 浏览器层语法不进 DNS 拦截
+        assert!(!domain_set.contains(&w("cosmetic.example.com")));
+        assert!(!domain_set.contains(&w("urlrule.example.com")));
+
+        // address 规则覆盖 block 集（SOA 拦截）
+        let rule = cfg
+            .find_domain_rule(&"ads.example.com".parse().unwrap(), "default")
+            .unwrap();
+        assert_eq!(rule.address, Some(AddressRuleValue::SOA));
+        let rule = cfg
+            .find_domain_rule(&"a.tracker.cn".parse().unwrap(), "default")
+            .unwrap();
+        assert_eq!(rule.address, Some(AddressRuleValue::SOA));
+
+        // @@ 例外域名放行：无 address 规则
+        assert!(cfg.is_allow_domain(&"allowed.example.com".parse().unwrap()));
+        assert!(cfg.is_allow_domain(&"sub.allowed.example.com".parse().unwrap()));
+        assert!(!cfg.is_allow_domain(&"ads.example.com".parse().unwrap()));
     }
 
     #[test]
