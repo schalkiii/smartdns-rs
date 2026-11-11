@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+### feat(webui): adblock 订阅管理界面（订阅 CRUD + 拦截统计）
+
+后端：新增 `/api/domain-sets` CRUD（托管 managed/domain-set.conf + 热更新）与
+`/api/adblock/stats`（拦截总数 + 查询日志聚合 Top 拦截域名/客户端）；
+`DnsContext.blocked` 标记 address 拦截命中，审计中间件递增 `App.blocked_queries`，
+拦截的 SOA-only 应答始终写入查询日志（否则 Top 拦截统计恒空）；
+`DomainSetStat` 提供 per-provider 规则数/例外数/来源统计。
+订阅增删联动维护 `managed/address.conf` 的 `address /domain-set:<name>/#` 行
+（订阅语义：添加即拦截、删除即放行）；`/dashboard/` 尾斜杠 307 重定向
+（axum 0.8 nest 不匹配尾斜杠路径）。
+
+前端：AdblockTab 统计卡片 + 订阅列表增删改对话框（含 AWAvenue 示例快捷填入）
++ Top 拦截域名/客户端；`useDashboardTab` 抽至 dashboard-context.ts
+（Next 16 layout 不允许导出非标准函数）。
+
+E2E（AWAvenue 真实订阅）：969 条规则加载、`aaid.umeng.com` 及子域 SOA 拦截、
+`@@` 例外放行、blocked 计数与查询日志标记、DELETE 后恢复解析。
+
 ### feat(dnsmasq): IPv6 反向解析支持邻居缓存（来自上游 #740）
 
 `ip -6 neigh` 输出解析 + 租约 MAC 索引：IPv6 地址不在 dnsmasq/odhcpd 租约文件中时，
