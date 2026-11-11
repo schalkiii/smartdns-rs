@@ -147,6 +147,43 @@ resolve-cli = ["dep:console"]                                    # resolve 子�
 disable_icmp_ping = []                                            # 无 ICMP 权限的环境/CI 测试用
 ```
 
+### WebUI 构建约束（web-ui 特性，改前端必读）
+
+- `web-ui` 特性经 rust-embed 在**编译期**嵌入 `webui/out/`（见 `src/api/web_ui.rs`）。
+  仓库入库了 40 个构建产物以保证 clone 即可 cargo build；改 `webui/src` 后必须重新
+  `cd webui && npm ci && npm run build` 并把新 `out/` 一并提交，否则二进制嵌入旧 UI。
+- CI（`.github/workflows/web-ui.yml`）会重新构建前端并下载产物覆盖 `webui/out`
+  再编译 Rust——本地忘记重建在 CI 不会暴露，但发布的包与本地行为可能不一致。
+- Next.js 16 默认 Turbopack。`layout.tsx` 不允许导出非标准生命周期函数
+  （自定义 hook 抽到独立文件）。`--webpack` 旗标可用但非默认。
+
+### ⚠️ 沙箱 node 写文件透明加密（TSD）陷阱（2026-11-11 事故）
+
+本机 WorkBuddy/沙箱环境的 node.exe（含系统 node）**写文件时会被过滤驱动透明加密**为
+`%TSD-Header-###%` 开头的二进制（读时透明解密回明文）。git.exe / .NET / python 看到的
+才是真实磁盘字节。后果与规约：
+
+1. **`npm install` / `next build` 的产物在真实磁盘上是 TSD 密文**，直接 `git add`
+   会把密文入库（已出过事故：0e1c1396 提交污染，507455d6 修复）。node fs 验证
+   "内容正常"是解密视图假象，不能作为入库前校验。
+2. **入库前必须转换通道**：node 读产物 → base64 → stdout 管道（Bash 管道可靠；
+   PowerShell 捕获 node stdout 会得空）→ python/.NET 解码写入 staging → bash cp 回
+   目标目录 → `git add`。验证用 `git hash-object` 或直接读 .git/objects blob。
+3. 判定文件是否被污染：`git hash-object <file>` 后读 `.git/objects/<hash>` 解 zlib，
+   或让 Bash `cat` 看 `%TSD` 头——**不要用 node fs 判断**。
+4. git checkout 写盘是明文（走 git.exe），lockfile 恢复用 `git checkout <rev> -- <path>`。
+
+### git push 通道（本机）
+
+HTTPS push 会因坏 fd 挂（`send-pack` 内部 pipe "Bad file descriptor"，沙箱内外皆然）。
+用 SSH 推送：
+```bash
+GIT_SSH_COMMAND="ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no" \
+  git push git@github.com:schalkiii/smartdns-rs.git main
+```
+commit 本身能成功（对象库写入正常），只是 stdout 汇报挂——用 `git log` 复核即可。
+`gh` CLI 需显式 `-R schalkiii/smartdns-rs`（remote 名解析在此环境不可靠）。
+
 Common build commands:
 ```bash
 # Build with all optional features

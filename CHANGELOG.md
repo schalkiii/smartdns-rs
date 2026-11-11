@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+### fix(webui): 修复 package-lock.json 与静态产物入库损坏（TSD 污染）
+
+0e1c1396 提交时 `webui/package-lock.json` 与 `webui/out/` 40 个文件被沙箱
+node 写盘透明加密污染（`%TSD-Header-###%` 二进制），导致 CI `npm ci` EUSAGE
+失败。恢复明文 lockfile 并以干净重建产物替换；入库 blob 已逐个验证为明文。
+
+### ci: windows-gnu cross 镜像升级到 main
+
+GitHub 2026-10~11 将 ubuntu-latest 从 24.04 迁到 26.04 后，cross 0.2.5 的
+windows-gnu 老镜像（Ubuntu 18.04 基底）在容器启动阶段静默 exit 1。
+Cross.toml 补齐 `[target.x86_64-pc-windows-gnu]` 的 `:main` 镜像配置，
+与其余目标对齐。
+
 ### feat(webui): adblock 订阅管理界面（订阅 CRUD + 拦截统计）
 
 后端：新增 `/api/domain-sets` CRUD（托管 managed/domain-set.conf + 热更新）与
