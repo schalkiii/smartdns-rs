@@ -62,6 +62,7 @@ impl App {
                     cache_miss_query_time_ns: AtomicU64::new(0),
                     bg_total_queries: AtomicU64::new(0),
                     bg_total_query_time_ns: AtomicU64::new(0),
+                    blocked_queries: Arc::new(AtomicU64::new(0)),
                     stats_history: Mutex::const_new(Vec::new()),
                     dns_client: RwLock::new(None),
                     query_log: Arc::new(StdMutex::new(VecDeque::with_capacity(QUERY_LOG_MAX))),
@@ -170,6 +171,11 @@ impl App {
         }
         let time_ns = self.bg_total_query_time_ns.load(Ordering::Relaxed);
         time_ns as f64 / total as f64 / 1_000_000.0
+    }
+
+    /// address 拦截规则（含 adblock 订阅）命中总数
+    pub fn blocked_queries(&self) -> u64 {
+        self.blocked_queries.load(Ordering::Relaxed)
     }
 
     pub async fn add_stats_snapshot(&self, query_hits: u64) {
@@ -285,6 +291,7 @@ impl App {
             dns_client.clone(),
             &mut cache,
             self.query_log.clone(),
+            self.blocked_queries.clone(),
         );
 
         *self.mw_handler.write().await = middleware_handler;
@@ -317,6 +324,9 @@ pub struct AppState {
     cache_miss_query_time_ns: AtomicU64,
     bg_total_queries: AtomicU64,
     bg_total_query_time_ns: AtomicU64,
+    /// address 拦截规则（含 adblock 订阅）命中总数（自启动累加，reload 不清零）。
+    /// Arc 包装以便共享给审计中间件。
+    blocked_queries: Arc<AtomicU64>,
     stats_history: Mutex<Vec<StatsSnapshot>>,
     /// 运行期上游客户端句柄（用于 WebUI 上游统计）。
     dns_client: RwLock<Option<Arc<DnsClient>>>,
@@ -716,6 +726,7 @@ fn build_middleware(
     dns_client: DnsClient,
     dns_cache: &mut Option<Arc<DnsCache>>,
     query_log: Arc<StdMutex<VecDeque<QueryLogEntry>>>,
+    blocked_counter: Arc<AtomicU64>,
 ) -> Arc<DnsMiddlewareHandler> {
     use crate::dns_mw_addr::AddressMiddleware;
     use crate::dns_mw_audit::DnsAuditMiddleware;
@@ -760,7 +771,11 @@ fn build_middleware(
             console: cfg.audit_console(),
             syslog: audit_syslog,
         };
-        builder = builder.with(DnsAuditMiddleware::new(query_log.clone(), audit_options));
+        builder = builder.with(DnsAuditMiddleware::new(
+            query_log.clone(),
+            blocked_counter,
+            audit_options,
+        ));
 
         if cfg.rule_groups().values().any(|x| !x.cnames.is_empty()) {
             builder = builder.with(DnsCNameMiddleware);

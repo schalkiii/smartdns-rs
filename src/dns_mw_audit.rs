@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::io;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::time::Instant;
@@ -31,6 +32,8 @@ pub struct QueryLogEntry {
     pub result: String,
     pub speed_ms: Option<f64>,
     pub source: String,
+    /// address 拦截规则（含 adblock 订阅）命中标记
+    pub blocked: bool,
 }
 
 impl From<&DnsAuditRecord> for QueryLogEntry {
@@ -52,6 +55,7 @@ impl From<&DnsAuditRecord> for QueryLogEntry {
                 Some(a.speed.as_secs_f64() * 1000.0)
             },
             source: format!("{:?}", a.lookup_source),
+            blocked: a.blocked,
         }
     }
 }
@@ -59,6 +63,8 @@ impl From<&DnsAuditRecord> for QueryLogEntry {
 pub struct DnsAuditMiddleware {
     audit_sender: Sender<DnsAuditRecord>,
     query_log: Arc<Mutex<VecDeque<QueryLogEntry>>>,
+    /// address 拦截规则（含 adblock 订阅）命中计数（与 App.blocked_queries 共享）
+    blocked_counter: Arc<AtomicU64>,
     audit_soa: bool,
     audit_console: bool,
     /// 是否存在磁盘/syslog/console 审计消费者：决定是否格式化明细并发送记录。
@@ -79,8 +85,17 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsAuditMiddl
 
         let res = next.run(ctx, req).await;
 
-        // 对应 C 版 audit.c:127：SOA-only 应答默认不写审计，audit-SOA yes 时才记录
-        if !self.audit_soa && is_soa_only(&res) {
+        // address 拦截规则（含 adblock 订阅）命中：递增拦截计数，
+        // 且拦截的 SOA-only 应答始终写入查询日志（见下方跳过逻辑的例外）。
+        let blocked = ctx.blocked;
+        if blocked {
+            self.blocked_counter.fetch_add(1, Ordering::Relaxed);
+        }
+
+        // 对应 C 版 audit.c:127：SOA-only 应答默认不写审计，audit-SOA yes 时才记录。
+        // 例外：拦截（blocked）应答始终进 WebUI 查询日志，
+        // 否则 Top 拦截域名统计（依赖查询日志聚合）将始终为空。
+        if !blocked && !self.audit_soa && is_soa_only(&res) {
             return res;
         }
 
@@ -104,6 +119,7 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsAuditMiddl
             elapsed: duration,
             speed: ctx.fastest_speed,
             lookup_source: ctx.source.clone(),
+            blocked: ctx.blocked,
         };
 
         // 写入 WebUI 查询日志环形缓冲（内存，非持久化）。
@@ -143,8 +159,13 @@ impl DnsAuditMiddleware {
     /// 构建审计中间件。
     ///
     /// `query_log` 为 WebUI 查询日志环形缓冲（始终写入，无论是否启用磁盘审计）；
+    /// `blocked_counter` 为 address 拦截规则命中计数（与 App.blocked_queries 共享）；
     /// `audit_file` 为可选的磁盘审计文件路径，仅在启用审计文件时传入，否则仅写入内存查询日志。
-    pub fn new(query_log: Arc<Mutex<VecDeque<QueryLogEntry>>>, options: AuditOptions) -> Self {
+    pub fn new(
+        query_log: Arc<Mutex<VecDeque<QueryLogEntry>>>,
+        blocked_counter: Arc<AtomicU64>,
+        options: AuditOptions,
+    ) -> Self {
         let AuditOptions {
             file: audit_file,
             size: audit_size,
@@ -218,6 +239,7 @@ impl DnsAuditMiddleware {
         Self {
             audit_sender: audit_tx,
             query_log,
+            blocked_counter,
             audit_soa,
             audit_console,
             audit_output_enabled,
@@ -239,6 +261,8 @@ pub struct DnsAuditRecord {
     elapsed: Duration,
     date: DateTime<Local>,
     lookup_source: LookupFrom,
+    /// address 拦截规则（含 adblock 订阅）命中标记
+    blocked: bool,
 }
 
 impl DnsAuditRecord {
@@ -413,6 +437,7 @@ mod tests {
             result_detail: Some(fmt_result_detail(&result)),
             elapsed: Duration::from_millis(10),
             speed: Duration::from_millis(11),
+            blocked: false,
             lookup_source: LookupFrom::Server("default".to_string()),
         };
 
@@ -444,6 +469,7 @@ mod tests {
             result_detail: Some(fmt_result_detail(&result)),
             elapsed: Duration::from_millis(10),
             speed: Duration::from_millis(11),
+            blocked: false,
             lookup_source: LookupFrom::Server("default".to_string()),
         };
 
@@ -473,6 +499,7 @@ mod tests {
             result_detail: Some(fmt_result_detail(&result)),
             elapsed: Duration::from_millis(10),
             speed: Duration::from_millis(11),
+            blocked: false,
             lookup_source: LookupFrom::Server("default".to_string()),
         };
 
@@ -525,6 +552,7 @@ mod tests {
             result_detail: Some(fmt_result_detail(&result)),
             elapsed: Duration::from_millis(10),
             speed: Duration::from_millis(11),
+            blocked: false,
             lookup_source: LookupFrom::Server("default1".to_string()),
         };
 
@@ -537,6 +565,7 @@ mod tests {
             result_detail: Some(fmt_result_detail(&result)),
             elapsed: Duration::from_millis(10),
             speed: Duration::from_millis(11),
+            blocked: false,
             lookup_source: LookupFrom::Server("default2".to_string()),
         };
 

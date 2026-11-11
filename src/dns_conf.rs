@@ -63,6 +63,25 @@ pub struct RuntimeConfig {
 
     /// adblock 订阅的例外集（`@@||domain^`）索引：命中即放行，不应用 address 拦截。
     allow_domain_map: crate::collections::DomainMap<()>,
+
+    /// 各 domain-set provider 的加载统计（规则数、例外数、加载结果），
+    /// 供 WebUI 订阅管理页面展示；reload 时重建。
+    domain_set_stats: HashMap<String, DomainSetStat>,
+}
+
+/// 单个 domain-set provider 的加载统计。
+#[derive(Debug, Clone, Default)]
+pub struct DomainSetStat {
+    /// 拦截规则数（block 集）
+    pub rule_count: usize,
+    /// 例外规则数（@@ 集仅 adblock 格式有）
+    pub allow_count: usize,
+    /// provider 类型描述（file / http）
+    pub source: String,
+    /// 订阅地址（文件路径或 URL）
+    pub location: String,
+    /// 内容类型（list / adblock）
+    pub content_type: String,
 }
 
 impl RuntimeConfig {
@@ -869,6 +888,11 @@ impl RuntimeConfig {
         self.managed_dir.as_deref()
     }
 
+    /// 全部 domain-set provider 的加载统计（规则数、例外数、来源），供 WebUI 展示。
+    pub fn domain_set_stats(&self) -> &HashMap<String, DomainSetStat> {
+        &self.domain_set_stats
+    }
+
     pub fn reload_new(&self) -> anyhow::Result<Arc<RuntimeConfig>> {
         let builder = RuntimeConfigBuilder {
             conf_dir: self.conf_dir.clone(),
@@ -972,23 +996,42 @@ impl RuntimeConfigBuilder {
 
         let mut domain_sets: HashMap<String, HashSet<WildcardName>> = HashMap::new();
         let mut allow_domain_map = crate::collections::DomainMap::new();
+        let mut domain_set_stats: HashMap<String, DomainSetStat> = HashMap::new();
 
         for (set_name, providers) in &cfg.domain_set_providers {
             let set = domain_sets.entry(set_name.to_string()).or_default();
             for p in providers.iter() {
+                // per-provider 加载统计（WebUI 订阅管理展示）
+                let stat = domain_set_stats.entry(p.name().to_string()).or_default();
+                stat.source = match p {
+                    crate::config::DomainSetProvider::File(_) => "file".to_string(),
+                    crate::config::DomainSetProvider::Http(_) => "http".to_string(),
+                };
+                stat.location = match p {
+                    crate::config::DomainSetProvider::File(f) => f.file.display().to_string(),
+                    crate::config::DomainSetProvider::Http(h) => h.url.to_string(),
+                };
+                stat.content_type = match p.get_content_type() {
+                    crate::config::DomainSetContentType::List => "list".to_string(),
+                    crate::config::DomainSetContentType::Adblock => "adblock".to_string(),
+                };
+
                 match p.get_domain_set() {
                     Ok(s) => {
                         log::info!("DoaminSet load {} records into {}", s.len(), p.name());
+                        stat.rule_count = s.len();
                         set.extend(s);
                     }
                     Err(err) => {
                         log::error!("DoaminSet load failed {} {}", p.name(), err);
+                        stat.rule_count = 0;
                     }
                 }
                 // adblock 例外集（@@||domain^）：拦截判断前查询，命中即放行
                 match p.get_allow_domain_set() {
                     Ok(a) if !a.is_empty() => {
                         log::info!("DoaminSet load {} allow records into {}", a.len(), p.name());
+                        stat.allow_count = a.len();
                         for name in a {
                             allow_domain_map.insert(name, ());
                         }
@@ -1128,6 +1171,7 @@ impl RuntimeConfigBuilder {
             ip_alias,
             proxy_servers: Arc::new(proxy_servers),
             allow_domain_map,
+            domain_set_stats,
         })
     }
 }
@@ -2233,6 +2277,45 @@ mod tests {
         assert!(cfg.is_allow_domain(&"allowed.example.com".parse().unwrap()));
         assert!(cfg.is_allow_domain(&"sub.allowed.example.com".parse().unwrap()));
         assert!(!cfg.is_allow_domain(&"ads.example.com".parse().unwrap()));
+    }
+
+    /// 真实订阅回归（需网络）：AWAvenue 广告规则 adblock 格式。
+    /// 972 条 ||domain^ + 4 条 *..* 通配 + 注释行；验证解析计数与抽样域名。
+    #[test]
+    #[ignore = "requires network access"]
+    fn test_adblock_real_subscription_awavenue() {
+        let cfg = RuntimeConfig::builder()
+            .with(
+                "domain-set -type adblock -name ads -u https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/main/Filters/AWAvenue-Ads-Rule-Adblock.txt",
+            )
+            .with("address /domain-set:ads/#")
+            .build()
+            .unwrap();
+
+        let stat = cfg.domain_set_stats().get("ads").expect("stats for ads");
+        assert_eq!(stat.content_type, "adblock");
+        assert_eq!(stat.source, "http");
+        // 972 条 ||domain^ 全部收录；*..* 通配行跳过
+        assert!(stat.rule_count >= 900, "rule_count = {}", stat.rule_count);
+        assert_eq!(stat.allow_count, 0);
+
+        // 抽样验证：订阅内真实存在的域名被 address 规则覆盖（SOA 拦截）
+        let rule = cfg
+            .find_domain_rule(&"aaid.umeng.com".parse().unwrap(), "default")
+            .unwrap();
+        assert_eq!(rule.address, Some(AddressRuleValue::SOA));
+
+        // 子域同样命中（||domain^ = Default 语义）
+        let rule = cfg
+            .find_domain_rule(&"x.aaid.umeng.com".parse().unwrap(), "default")
+            .unwrap();
+        assert_eq!(rule.address, Some(AddressRuleValue::SOA));
+
+        // 正常域名不受影响
+        assert!(
+            cfg.find_domain_rule(&"example.com".parse().unwrap(), "default")
+                .is_none()
+        );
     }
 
     #[test]

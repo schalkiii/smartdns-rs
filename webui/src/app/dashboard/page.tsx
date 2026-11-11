@@ -57,7 +57,8 @@ import Select from "@mui/material/Select";
 import MenuItem from "@mui/material/MenuItem";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import { useState } from "react";
-import { useDashboardTab } from "./layout";
+import { useDashboardTab } from "./dashboard-context";
+import AdblockTab from "./tabs/AdblockTab";
 import {
   useStats,
   useCaches,
@@ -1678,6 +1679,8 @@ export default function DashboardPage() {
       return <CacheTab />;
     case "rules":
       return <RulesTab />;
+    case "adblock":
+      return <AdblockTab />;
     case "querylog":
       return <QueryLogTab />;
     case "overview":

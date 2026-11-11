@@ -70,6 +70,8 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for AddressMiddle
             );
 
             ctx.source = LookupFrom::Static;
+            // address 拦截规则命中（含 adblock 订阅）：供审计统计识别真实拦截
+            ctx.blocked = true;
             return Ok(lookup);
         }
 

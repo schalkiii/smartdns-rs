@@ -187,6 +187,111 @@ export interface VersionResponse {
   version: string;
 }
 
+// ---------- DomainSets / Adblock ----------
+
+export interface DomainSetEntry {
+  name: string;
+  source: string;
+  location: string;
+  content_type: string;
+  interval: number | null;
+  rule_count: number;
+  allow_count: number;
+  enabled: boolean;
+}
+
+export interface DomainSetsResponse {
+  count: number;
+  total: number;
+  data: DomainSetEntry[];
+}
+
+export interface BlockedNameCount {
+  name: string;
+  count: number;
+}
+
+export interface AdblockStatsResponse {
+  blocked_total: number;
+  top_blocked_domains: BlockedNameCount[];
+  top_blocked_clients: BlockedNameCount[];
+}
+
+export interface CreateDomainSetInput {
+  name: string;
+  url: string;
+  content_type: string;
+  interval?: number | null;
+}
+
+export interface UpdateDomainSetInput {
+  name: string;
+  new_name?: string;
+  url?: string;
+  interval?: number | null;
+}
+
+const domainSetsKeys = ["domain-sets"] as const;
+const adblockStatsKeys = ["adblock-stats"] as const;
+
+export function useDomainSets() {
+  return useQuery({
+    queryKey: domainSetsKeys,
+    queryFn: () => apiGet<DomainSetsResponse>("/api/domain-sets"),
+  });
+}
+
+export function useAdblockStats() {
+  return useQuery({
+    queryKey: adblockStatsKeys,
+    queryFn: () => apiGet<AdblockStatsResponse>("/api/adblock/stats"),
+    refetchInterval: 5000,
+  });
+}
+
+export function useCreateDomainSet() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateDomainSetInput) =>
+      apiPost<void>("/api/domain-sets", input),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: domainSetsKeys });
+    },
+  });
+}
+
+export function useUpdateDomainSet() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: UpdateDomainSetInput) => {
+      // apiPut 封装不存在，直接用 fetch（与 apiDelete 同模式）
+      return fetch("/api/domain-sets", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      }).then((res) => {
+        if (!res.ok) {
+          throw new Error(`API error: ${res.status} ${res.statusText}`);
+        }
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: domainSetsKeys });
+    },
+  });
+}
+
+export function useDeleteDomainSet() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) =>
+      apiDelete<void>("/api/domain-sets", { name }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: domainSetsKeys });
+    },
+  });
+}
+
 const statsKeys = ["stats"] as const;
 const systemStatusKeys = ["system-status"] as const;
 const cachesKeys = ["caches"] as const;

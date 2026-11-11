@@ -16,6 +16,7 @@ mod address;
 mod audit;
 mod cache;
 mod config;
+mod domain_set;
 mod forward;
 mod listener;
 mod log;
@@ -48,7 +49,13 @@ pub fn routes() -> axum::Router<Arc<ServeState>> {
         .version(crate::BUILD_VERSION)
         .build();
 
-    let router = router.nest("/dashboard", web_ui::routes());
+    let router = router
+        .nest("/dashboard", web_ui::routes())
+        // axum 0.8 的 nest 不匹配尾斜杠路径，显式把 /dashboard/ 重定向到 /dashboard
+        .route(
+            "/dashboard/",
+            get(|| async { axum::response::Redirect::temporary("/dashboard") }),
+        );
 
     let router = {
         cfg_if! {
@@ -91,6 +98,7 @@ fn api_routes() -> StatefulRouter {
         .merge(nameserver::routes())
         .merge(address::routes())
         .merge(forward::routes())
+        .merge(domain_set::routes())
         .merge(audit::routes())
         .merge(listener::routes())
         .merge(log::routes())

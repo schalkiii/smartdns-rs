@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useState } from 'react';
+import { useState } from 'react';
 import Box from '@mui/material/Box';
 import Drawer from '@mui/material/Drawer';
 import AppBar from '@mui/material/AppBar';
@@ -19,30 +19,21 @@ import StorageIcon from '@mui/icons-material/Storage';
 import RuleIcon from '@mui/icons-material/Rule';
 import MenuIcon from '@mui/icons-material/Menu';
 import HistoryIcon from '@mui/icons-material/History';
+import BlockIcon from '@mui/icons-material/Block';
+
+import {
+  DashboardTabContext,
+  type DashboardTab,
+} from './dashboard-context';
 
 const DRAWER_WIDTH = 240;
-
-export type DashboardTab = 'overview' | 'upstream' | 'cache' | 'rules' | 'querylog';
-
-interface DashboardTabContextType {
-  currentTab: DashboardTab;
-  setCurrentTab: (tab: DashboardTab) => void;
-}
-
-const DashboardTabContext = createContext<DashboardTabContextType>({
-  currentTab: 'overview',
-  setCurrentTab: () => {},
-});
-
-export function useDashboardTab() {
-  return useContext(DashboardTabContext);
-}
 
 const navItems: { label: string; icon: React.ReactNode; tab: DashboardTab }[] = [
   { label: '系统概览', icon: <DashboardIcon />, tab: 'overview' },
   { label: '上游服务器', icon: <DnsIcon />, tab: 'upstream' },
   { label: '缓存管理', icon: <StorageIcon />, tab: 'cache' },
   { label: '规则管理', icon: <RuleIcon />, tab: 'rules' },
+  { label: '广告拦截', icon: <BlockIcon />, tab: 'adblock' },
   { label: '查询日志', icon: <HistoryIcon />, tab: 'querylog' },
 ];
 

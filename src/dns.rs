@@ -34,6 +34,9 @@ pub struct DnsContext {
     pub no_cache: bool,
     /// 缓存的服务器组名称，避免重复遍历 domain_rule 树
     server_group_name: String,
+    /// address 拦截规则（含 adblock 订阅）命中标记：供审计/统计识别真实拦截，
+    /// 区别于 dnsmasq hosts 的 LookupFrom::Static 应答。
+    pub blocked: bool,
 }
 
 impl DnsContext {
@@ -54,6 +57,7 @@ impl DnsContext {
             source: Default::default(),
             no_cache,
             server_group_name,
+            blocked: false,
         }
     }
 

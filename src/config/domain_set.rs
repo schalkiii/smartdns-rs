@@ -27,6 +27,9 @@ pub trait IDomainSetProvider {
     fn get_allow_domain_set(&self) -> Result<HashSet<WildcardName>> {
         Ok(Default::default())
     }
+
+    /// 内容类型（list / adblock），供统计与 WebUI 展示。
+    fn get_content_type(&self) -> &DomainSetContentType;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,9 +55,58 @@ pub enum DomainSetContentType {
     Adblock,
 }
 
+impl std::fmt::Display for DomainSetContentType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::List => write!(f, "list"),
+            Self::Adblock => write!(f, "adblock"),
+        }
+    }
+}
+
+/// 序列化 domain-set 配置行（托管文件写回用，与 parser 语法一一对应）。
+impl std::fmt::Display for DomainSetFileProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "-type {} -name {} -file {}",
+            self.content_type,
+            self.name,
+            self.file.display()
+        )
+    }
+}
+
+impl std::fmt::Display for DomainSetHttpProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "-type {} -name {} -url {}",
+            self.content_type, self.name, self.url
+        )?;
+        if let Some(interval) = self.interval {
+            write!(f, " -interval {interval}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::fmt::Display for DomainSetProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::File(p) => write!(f, "{p}"),
+            Self::Http(p) => write!(f, "{p}"),
+        }
+    }
+}
+
 impl IDomainSetProvider for DomainSetFileProvider {
     fn name(&self) -> &str {
         self.name.as_str()
+    }
+
+    fn get_content_type(&self) -> &DomainSetContentType {
+        &self.content_type
     }
 
     fn get_domain_set(&self) -> Result<HashSet<WildcardName>> {
@@ -83,6 +135,10 @@ impl IDomainSetProvider for DomainSetFileProvider {
 impl IDomainSetProvider for DomainSetHttpProvider {
     fn name(&self) -> &str {
         self.name.as_str()
+    }
+
+    fn get_content_type(&self) -> &DomainSetContentType {
+        &self.content_type
     }
 
     fn get_domain_set(&self) -> Result<HashSet<WildcardName>> {

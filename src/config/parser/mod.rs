@@ -229,7 +229,7 @@ impl std::fmt::Display for ConfigItem {
             ConfigItem::DnsmasqLeaseFile(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::Domain(_) => write!(f, "# unsupported config item: {:?}", self)?,
             ConfigItem::DomainRule(_) => write!(f, "# unsupported config item: {:?}", self)?,
-            ConfigItem::DomainSetProvider(_) => write!(f, "# unsupported config item: {:?}", self)?,
+            ConfigItem::DomainSetProvider(p) => write!(f, "domain-set {p}")?,
             ConfigItem::DualstackIpAllowForceAAAA(_) => {
                 write!(f, "# unsupported config item: {:?}", self)?
             }
