@@ -20,6 +20,7 @@ import RuleIcon from '@mui/icons-material/Rule';
 import MenuIcon from '@mui/icons-material/Menu';
 import HistoryIcon from '@mui/icons-material/History';
 import BlockIcon from '@mui/icons-material/Block';
+import SettingsIcon from '@mui/icons-material/Settings';
 
 import {
   DashboardTabContext,
@@ -35,6 +36,7 @@ const navItems: { label: string; icon: React.ReactNode; tab: DashboardTab }[] = 
   { label: '规则管理', icon: <RuleIcon />, tab: 'rules' },
   { label: '广告拦截', icon: <BlockIcon />, tab: 'adblock' },
   { label: '查询日志', icon: <HistoryIcon />, tab: 'querylog' },
+  { label: '配置设置', icon: <SettingsIcon />, tab: 'settings' },
 ];
 
 export default function DashboardLayout({

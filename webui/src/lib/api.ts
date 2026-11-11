@@ -3,7 +3,8 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 async function apiGet<T>(path: string): Promise<T> {
   const res = await fetch(path);
   if (!res.ok) {
-    throw new Error(`API error: ${res.status} ${res.statusText}`);
+    const detail = await res.text().catch(() => "");
+    throw new Error(detail || `API error: ${res.status} ${res.statusText}`);
   }
   return res.json();
 }
@@ -15,7 +16,8 @@ async function apiPost<T>(path: string, body?: unknown): Promise<T> {
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
-    throw new Error(`API error: ${res.status} ${res.statusText}`);
+    const detail = await res.text().catch(() => "");
+    throw new Error(detail || `API error: ${res.status} ${res.statusText}`);
   }
   if (res.status === 201 || res.status === 204) {
     return undefined as T;
@@ -30,7 +32,24 @@ async function apiDelete<T>(path: string, body?: unknown): Promise<T> {
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
-    throw new Error(`API error: ${res.status} ${res.statusText}`);
+    const detail = await res.text().catch(() => "");
+    throw new Error(detail || `API error: ${res.status} ${res.statusText}`);
+  }
+  if (res.status === 204) {
+    return undefined as T;
+  }
+  return res.json();
+}
+
+async function apiPut<T>(path: string, body?: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(detail || `API error: ${res.status} ${res.statusText}`);
   }
   if (res.status === 204) {
     return undefined as T;
@@ -263,18 +282,8 @@ export function useCreateDomainSet() {
 export function useUpdateDomainSet() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: UpdateDomainSetInput) => {
-      // apiPut 封装不存在，直接用 fetch（与 apiDelete 同模式）
-      return fetch("/api/domain-sets", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(input),
-      }).then((res) => {
-        if (!res.ok) {
-          throw new Error(`API error: ${res.status} ${res.statusText}`);
-        }
-      });
-    },
+    mutationFn: (input: UpdateDomainSetInput) =>
+      apiPut<void>("/api/domain-sets", input),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: domainSetsKeys });
     },
@@ -443,6 +452,86 @@ export function useReloadConfig() {
     mutationFn: () => apiPost<void>("/api/config/reload"),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: configKeys });
+    },
+  });
+}
+
+// ---------- 配置编辑（标量选项 / 结构项行） ----------
+
+export interface ConfigOptionsResponse {
+  conf_file: string | null;
+  values: Record<string, string>;
+}
+
+export interface ConfigLineEntry {
+  index: number;
+  key: string;
+  value: string;
+  comment: string | null;
+}
+
+export interface ConfigLinesResponse {
+  family: string;
+  lines: ConfigLineEntry[];
+}
+
+export interface MutateConfigLineInput {
+  family: string;
+  action: "add" | "update" | "delete";
+  key: string;
+  value?: string;
+  index?: number;
+  comment?: string | null;
+}
+
+const configOptionsKeys = ["config-options"] as const;
+const configLinesKeys = ["config-lines"] as const;
+
+export function useConfigOptions() {
+  return useQuery({
+    queryKey: configOptionsKeys,
+    queryFn: () => apiGet<ConfigOptionsResponse>("/api/config/options"),
+  });
+}
+
+export function useUpdateConfigOptions() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (options: Record<string, string | null>) =>
+      apiPut<ConfigOptionsResponse>("/api/config/options", { options }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: configOptionsKeys });
+      queryClient.invalidateQueries({ queryKey: configKeys });
+      queryClient.invalidateQueries({ queryKey: nameserversKeys });
+      queryClient.invalidateQueries({ queryKey: listenersKeys });
+      queryClient.invalidateQueries({ queryKey: cacheConfigKeys });
+    },
+  });
+}
+
+export function useConfigLines(family: string) {
+  return useQuery({
+    queryKey: [...configLinesKeys, family],
+    queryFn: () =>
+      apiGet<ConfigLinesResponse>(
+        `/api/config/lines?family=${encodeURIComponent(family)}`
+      ),
+  });
+}
+
+export function useMutateConfigLines() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: MutateConfigLineInput) =>
+      apiPost<ConfigLinesResponse>("/api/config/lines", input),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({
+        queryKey: [...configLinesKeys, data.family],
+      });
+      queryClient.invalidateQueries({ queryKey: nameserversKeys });
+      queryClient.invalidateQueries({ queryKey: listenersKeys });
+      queryClient.invalidateQueries({ queryKey: addressesKeys });
+      queryClient.invalidateQueries({ queryKey: forwardsKeys });
     },
   });
 }

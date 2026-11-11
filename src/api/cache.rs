@@ -15,9 +15,12 @@ use axum::{
 use serde::Deserialize;
 
 pub fn routes() -> StatefulRouter {
-    let r1 = routes![flush, caches].into_router();
-    let r2 = routes![config].into_router();
-    r1.merge(r2)
+    // 本 fork 的 routes! 会把联合 MethodRouter 挂到调用内每个路径上：
+    // 不同路径必须分开调用再 merge（同路径不同方法可合并，见 AGENTS.md）
+    let r1 = routes![caches].into_router();
+    let r2 = routes![flush].into_router();
+    let r3 = routes![config].into_router();
+    r1.merge(r2).merge(r3)
 }
 
 #[derive(Debug, Deserialize)]

@@ -157,6 +157,20 @@ disable_icmp_ping = []                                            # 无 ICMP 权
 - Next.js 16 默认 Turbopack。`layout.tsx` 不允许导出非标准生命周期函数
   （自定义 hook 抽到独立文件）。`--webpack` 旗标可用但非默认。
 
+### ⚠️ utoipa-axum fork 的 routes! 宏必须按路径拆分（改 src/api 必读）
+
+本项目用的是 mokeyish/utoipa fork（rev smartdns.1），其 `routes!` 语义与上游不同：
+宏把调用内**所有 handler 折叠进同一个 MethodRouter**，`OpenApiRouter::routes()` 再把这个
+MethodRouter 克隆挂到调用内**每一个路径**上（本地源码：`$CARGO_HOME/git/checkouts/utoipa-*/7752ae9/utoipa-axum/src/lib.rs` 的 `routes!` 与 `router.rs` 的 `routes`）。后果：
+
+1. 同一次调用里两个同 HTTP 方法的 handler → 启动即 panic `Overlapping method route`。
+2. 同一次调用里多个路径 → 每个路径都接受全部方法（跨路径泄漏），merge 时还会 panic
+   `Handler for GET … already exists`。
+
+**正确写法：一个路径一次 `routes!` 调用（同路径不同方法可合并），再 `.merge()` 汇聚**，
+参考 `src/api/config.rs::routes()` 与 `src/api/address.rs`。新增 API 模块后务必实际启动
+二进制验证（`cargo check` 检不出运行时 panic）。
+
 ### ⚠️ 沙箱 node 写文件透明加密（TSD）陷阱（2026-11-11 事故）
 
 本机 WorkBuddy/沙箱环境的 node.exe（含系统 node）**写文件时会被过滤驱动透明加密**为

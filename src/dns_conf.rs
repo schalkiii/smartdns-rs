@@ -888,6 +888,10 @@ impl RuntimeConfig {
         self.conf_dir.as_deref()
     }
 
+    pub fn conf_file(&self) -> Option<&Path> {
+        self.conf_file.as_deref()
+    }
+
     pub fn managed_dir(&self) -> Option<&Path> {
         self.managed_dir.as_deref()
     }

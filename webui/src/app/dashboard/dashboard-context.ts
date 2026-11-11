@@ -8,7 +8,8 @@ export type DashboardTab =
   | 'cache'
   | 'rules'
   | 'adblock'
-  | 'querylog';
+  | 'querylog'
+  | 'settings';
 
 export interface DashboardTabContextType {
   currentTab: DashboardTab;

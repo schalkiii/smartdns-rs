@@ -4,6 +4,29 @@
 
 ## [Unreleased]
 
+### feat(webui): 全量配置设置页（77 标量项 + 23 结构族，悬浮说明）
+
+- 新增「配置设置」页：按 11 个分组渲染 conf 全部 77 个单值选项
+  （开关/数值/文本/下拉），每项带 ⓘ 悬浮配置说明（含取值建议与
+  未接线警告）；脏项标记、批量保存后自动热更新、恢复默认（注释化）、
+  空值拦截。高级选项折叠区收纳 15 个低频结构族编辑器。
+- 结构性选项嵌入既有页面：上游服务器页新增「上游 DNS 服务器 /
+  监听地址 / 代理服务器」行编辑器（server*/bind*/proxy-server），
+  规则管理页拆为地址规则 / 转发规则 / 静态记录 / IP 过滤四个子页。
+- 后端新增 `GET/PUT /api/config/options` 与 `GET/POST /api/config/lines`：
+  行级文本外科手术（保留注释与未知行），写入前经真实 `parse_config`
+  校验，组深度作用域定位，陈旧索引守卫；保存即热更新。
+- 键集完整度对账：解析器全部键 vs API 键集，补齐遗漏的 `bind-http`
+  （HTTP API 监听，此前监听地址编辑器不显示也无法添加）。
+
+### fix(api): routes! 宏按路径拆分（fork 语义陷阱）
+
+mokeyish/utoipa fork 的 `routes!` 把调用内所有 handler 折叠进同一个
+MethodRouter 并挂到每个路径上：同方法多 handler 启动即 panic，多路径
+合调则跨路径泄漏方法。`config.rs` 按路径拆分修复启动 panic；顺带修复
+`cache.rs` 的既有泄漏（POST /caches 会误触 flush、GET /caches/flush
+会误返缓存列表）。AGENTS.md 补记该陷阱与正确写法。
+
 ### fix(api): 修复订阅保存卡死与热更新日志静默丢失
 
 WebUI 添加订阅「一直卡在保存中」的两个代码根因：

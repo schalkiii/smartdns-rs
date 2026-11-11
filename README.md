@@ -34,6 +34,7 @@ This repository is a production-hardened fork of [mokeyish/smartdns-rs](https://
 
 ### Web UI (major expansion)
 
+- **Settings page** (new): every single-value conf option (77 keys in 11 groups) editable in the browser, each with a hover tooltip explaining the option, its values and caveats; dirty tracking, batch save with automatic hot-reload, and restore-to-default. Structural options are embedded where they belong — upstream/bind/proxy line editors on the Upstream page, and address/forward/static-record/IP-filter sub-tabs on the Rules page — backed by the new `/api/config/options` and `/api/config/lines` endpoints (line-level edits that preserve comments, validated by the real config parser before writing).
 - **Query Log page** (new): the most recent 1000 queries from an in-memory ring buffer, with domain / client / record-type filters, auto-refresh toggle and manual refresh — backed by the new `/api/query-log` endpoint.
 - **Upstream server statistics** (new): per-server IP, port, protocol (UDP/TCP/DoT/DoH/DoQ/DoH3), security (encrypted/plaintext), runtime status (healthy/error), query/success/failure totals, average response time and success rate, plus aggregate totals — via `/api/nameservers` and `/api/stats/top-domains|clients|query-types`.
 - **Overview page** (new): top domains & active clients ranking.
@@ -113,7 +114,7 @@ This repository is a production-hardened fork of [mokeyish/smartdns-rs](https://
 
 - **Web UI Dashboard**
 
-  Built-in web dashboard with a single-page tabbed interface for real-time monitoring and management. Supports system overview (with top domains/clients ranking), upstream server inspection (per-server IP/port/protocol/security/status/query counts/success rate/average time), query log browsing with filters, cache management with search/flush, and rule management with address/forward CRUD.
+  Built-in web dashboard with a single-page tabbed interface for real-time monitoring and management. Supports system overview (with top domains/clients ranking), upstream server inspection (per-server IP/port/protocol/security/status/query counts/success rate/average time), query log browsing with filters, cache management with search/flush, rule management with address/forward/static-record/IP-filter CRUD, and a full settings page covering every conf option with hover tooltips and hot-reload on save.
 
 - **Configuration parity with the C version**
 
@@ -275,7 +276,7 @@ dig @127.0.0.1 CH TXT id.server +short
 
 ## Web UI Dashboard
 
-SmartDNS-rs includes an embedded web dashboard accessible over HTTP. It provides real-time monitoring of DNS query statistics, cache inspection, upstream server status, and rule management — all in a single-page tabbed interface.
+SmartDNS-rs includes an embedded web dashboard accessible over HTTP. It provides real-time monitoring of DNS query statistics, cache inspection, upstream server status, rule management, and a settings page for every conf option (with hover tooltips and hot-reload on save) — all in a single-page tabbed interface.
 
 ### Screenshots
 

@@ -18,8 +18,8 @@ use super::{ApiError, DataListPayload, ServeState, StatefulRouter};
 use axum::{Json, extract::State, http::StatusCode};
 
 pub fn routes() -> StatefulRouter {
-    // /domain-sets 与 /adblock/stats 分开生成再 merge：
-    // utoipa_axum 的 routes! 宏对多个 GET handler 会生成重叠路由
+    // 本 fork 的 routes! 会把联合 MethodRouter 挂到调用内每个路径上：
+    // 不同路径必须分开调用再 merge（同路径不同方法可合并，见 AGENTS.md）
     let r1 = routes![list, create, update, delete].into_router();
     let r2 = routes![stats].into_router();
     r1.merge(r2)

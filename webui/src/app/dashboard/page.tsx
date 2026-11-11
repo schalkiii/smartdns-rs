@@ -59,6 +59,8 @@ import RefreshIcon from "@mui/icons-material/Refresh";
 import { useState } from "react";
 import { useDashboardTab } from "./dashboard-context";
 import AdblockTab from "./tabs/AdblockTab";
+import SettingsTab from "./tabs/SettingsTab";
+import ConfigLinesEditor from "./components/ConfigLinesEditor";
 import {
   useStats,
   useCaches,
@@ -747,8 +749,10 @@ function UpstreamTab() {
         </Grid>
       </Grid>
 
+      <ConfigLinesEditor family="server" />
+
       <Typography variant="h5" sx={{ mb: 2, fontWeight: 600 }}>
-        上游 DNS 服务器
+        上游 DNS 服务器（运行统计）
       </Typography>
 
       {nsLoading ? (
@@ -859,7 +863,7 @@ function UpstreamTab() {
       )}
 
       <Typography variant="h5" sx={{ mb: 2, mt: 4, fontWeight: 600 }}>
-        监听端口
+        监听端口（运行状态）
       </Typography>
 
       {lsLoading ? (
@@ -914,6 +918,11 @@ function UpstreamTab() {
           </Table>
         </TableContainer>
       )}
+
+      <Box sx={{ mt: 4 }}>
+        <ConfigLinesEditor family="bind" />
+        <ConfigLinesEditor family="proxy-server" />
+      </Box>
     </Box>
   );
 }
@@ -1484,13 +1493,28 @@ function RulesTab() {
           >
             <Tab label="地址规则" />
             <Tab label="转发规则" />
+            <Tab label="静态记录" />
+            <Tab label="IP 过滤" />
           </Tabs>
 
           <RulesTabPanel value={tab} index={0}>
             <AddressRulesTab />
           </RulesTabPanel>
           <RulesTabPanel value={tab} index={1}>
+            <ConfigLinesEditor family="forward" />
             <ForwardRulesTab />
+          </RulesTabPanel>
+          <RulesTabPanel value={tab} index={2}>
+            <ConfigLinesEditor family="cname" />
+            <ConfigLinesEditor family="txt-record" />
+            <ConfigLinesEditor family="srv-record" />
+            <ConfigLinesEditor family="https-record" />
+          </RulesTabPanel>
+          <RulesTabPanel value={tab} index={3}>
+            <ConfigLinesEditor family="blacklist-ip" />
+            <ConfigLinesEditor family="whitelist-ip" />
+            <ConfigLinesEditor family="bogus-nxdomain" />
+            <ConfigLinesEditor family="ignore-ip" />
           </RulesTabPanel>
         </CardContent>
       </Card>
@@ -1683,6 +1707,8 @@ export default function DashboardPage() {
       return <AdblockTab />;
     case "querylog":
       return <QueryLogTab />;
+    case "settings":
+      return <SettingsTab />;
     case "overview":
     default:
       return <OverviewTab />;
