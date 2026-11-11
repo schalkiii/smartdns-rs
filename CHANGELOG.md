@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+### fix(api): 修复订阅保存卡死与热更新日志静默丢失
+
+WebUI 添加订阅「一直卡在保存中」的两个代码根因：
+
+- `server/http`：HTTP 独立 runtime（2 worker）未安装线程级日志 guard，
+  API 路径（含配置热更新、订阅加载失败）的日志全部静默丢弃，故障无痕迹。
+  现经 `log::FILE_DISPATCH` 共享 dispatch，HTTP 线程与主 runtime 同样装
+  `LOG_GUARD`。
+- `app::reload`：`reload_new` 含同步文件 IO 与订阅 HTTP 下载（单 URL 最长
+  30s），直接在 async worker 上执行会占死线程——HTTP runtime 仅 2 线程，
+  两个并发保存即冻结整个 WebUI。现移入 `spawn_blocking` 执行。
+
 ### fix(conf): 修复非 smartdns 命名目录下订阅/address API 全 404
 
 `RuntimeConfig::load` 原先只在配置文件父目录名恰为 `smartdns` 时才推导

@@ -36,6 +36,16 @@ pub fn serve(
                 .worker_threads(2)
                 .enable_all()
                 .thread_name("smartdns-http")
+                // 独立 runtime 不继承主 runtime 的线程级日志 guard，
+                // 不安装则 API 路径（含配置热更新）的日志全部静默丢失
+                .on_thread_start(|| {
+                    if let Some(dispatch) = log::FILE_DISPATCH.get() {
+                        log::LOG_GUARD.replace(Some(log::set_default(dispatch)));
+                    }
+                })
+                .on_thread_stop(|| {
+                    log::LOG_GUARD.take();
+                })
                 .build()
                 .expect("failed to create HTTP runtime");
 

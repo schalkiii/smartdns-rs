@@ -94,7 +94,10 @@ impl App {
     pub async fn reload(&self) -> anyhow::Result<()> {
         log::info!("reloading configuration...");
         let cfg = self.cfg().await;
-        let cfg = cfg.reload_new()?;
+        // reload_new 含同步文件 IO 与订阅 HTTP 下载（单 URL 最长 30s），
+        // 直接 await 会占死 async worker（HTTP runtime 仅 2 线程，两个并发
+        // 保存即冻结整个 WebUI），移到阻塞线程池执行
+        let cfg = tokio::task::spawn_blocking(move || cfg.reload_new()).await??;
         *self.cfg.write().await = cfg;
         self.update_middleware_handler().await;
         self.update_listeners().await;
@@ -351,6 +354,7 @@ pub fn serve(cfg: Arc<RuntimeConfig>) {
         cfg.log_config().color(),
         cfg.log_config().syslog(),
     );
+    let _ = log::FILE_DISPATCH.set(log_dispatch.clone());
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(cfg.num_workers())

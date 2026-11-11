@@ -14,6 +14,10 @@ use tracing_subscriber::{
 
 static INIT_CONSOLE_LEVEL: OnceLock<Level> = OnceLock::new();
 
+/// 供独立 runtime（如 HTTP 服务线程）安装线程级日志 guard：
+/// 这些线程不走主 runtime 的 on_thread_start，不取用此 dispatch 会静默丢日志。
+pub static FILE_DISPATCH: OnceLock<Dispatch> = OnceLock::new();
+
 thread_local! {
     pub static LOG_GUARD: RefCell<Option<DefaultGuard>> = const { RefCell::new(None) };
 }
