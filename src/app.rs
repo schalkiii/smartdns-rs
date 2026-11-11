@@ -538,7 +538,9 @@ async fn process(
                             let (response, from_cache) = {
                                 let start = Instant::now();
                                 let qid = request.id();
-                                let qname = request.query().original().to_string();
+                                // qname 不提前 to_string()：tracing 宏惰性求值，
+                                // 日志级别未启用时零分配
+                                let qname = request.query().original();
                                 let qtype = request.query().query_type();
                                 let bg = server_opts.is_background;
 

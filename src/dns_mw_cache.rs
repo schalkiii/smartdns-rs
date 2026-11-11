@@ -1188,9 +1188,10 @@ pub struct CachedQueryRecord {
 fn entry_size(query: &Query, entry: &DnsCacheEntry) -> usize {
     use std::mem::size_of;
 
-    let mut size = size_of::<Query>() + size_of::<DnsCacheEntry>() + query.name().to_utf8().len();
+    // Name::len() 为编码长度（labels + 分隔符），与 utf8 表示长度差至多 1，作为估算足够
+    let mut size = size_of::<Query>() + size_of::<DnsCacheEntry>() + query.name().len();
     for record in entry.data.records() {
-        size += size_of::<Record>() + record.name().to_utf8().len() + 128;
+        size += size_of::<Record>() + record.name().len() + 128;
     }
     size
 }

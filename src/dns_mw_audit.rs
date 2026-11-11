@@ -41,7 +41,7 @@ impl From<&DnsAuditRecord> for QueryLogEntry {
             domain: a.query.name().to_utf8(),
             query_type: a.query.query_type().to_string(),
             elapsed_ms: a.elapsed.as_secs_f64() * 1000.0,
-            result: if a.result.is_ok() {
+            result: if a.result_ok {
                 "success".to_string()
             } else {
                 "failed".to_string()
@@ -61,6 +61,8 @@ pub struct DnsAuditMiddleware {
     query_log: Arc<Mutex<VecDeque<QueryLogEntry>>>,
     audit_soa: bool,
     audit_console: bool,
+    /// 是否存在磁盘/syslog/console 审计消费者：决定是否格式化明细并发送记录。
+    audit_output_enabled: bool,
 }
 
 #[async_trait::async_trait]
@@ -84,12 +86,21 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsAuditMiddl
 
         let duration = start.elapsed();
 
+        // 仅当存在磁盘/syslog/console 审计消费者时才格式化结果明细，
+        // 否则跳过（WebUI 查询日志只需要成功/失败状态），消除每请求的全量 Message 克隆。
+        let result_detail = if self.audit_output_enabled {
+            Some(fmt_result_detail(&res))
+        } else {
+            None
+        };
+
         let audit = DnsAuditRecord {
             id: req.id(),
             date: now,
             client: req.src().to_string(),
             query: req.query().original().to_owned(),
-            result: res.clone(),
+            result_ok: res.is_ok(),
+            result_detail,
             elapsed: duration,
             speed: ctx.fastest_speed,
             lookup_source: ctx.source.clone(),
@@ -106,9 +117,11 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for DnsAuditMiddl
 
         // debug!("{}", audit.to_string_without_date());
 
-        // 审计发送不得阻塞请求返回路径：有界通道(容量100)满时直接丢弃（审计允许丢失），
-        // 否则磁盘 IO 缓慢时所有 DNS 响应延迟都会被审计写盘速度拖住。
-        if self.audit_sender.try_send(audit).is_err() {
+        // 无审计消费者时接收端已 drop，发送必然失败：跳过发送，避免每请求一次
+        // try_send + warn 日志的开销。
+        if self.audit_output_enabled
+            && self.audit_sender.try_send(audit).is_err()
+        {
             warn!("audit queue full, dropping audit record");
         }
 
@@ -145,6 +158,14 @@ impl DnsAuditMiddleware {
         } = options;
 
         let (audit_tx, mut audit_rx) = mpsc::channel::<DnsAuditRecord>(100);
+
+        // 是否存在审计消费者：
+        // - 文件审计（console 输出内嵌在文件消费任务中，依赖文件启用）
+        // - syslog（仅 unix 有消费者；非 unix 上接收端被 drop）
+        #[cfg(unix)]
+        let audit_output_enabled = audit_file.is_some() || audit_syslog;
+        #[cfg(not(unix))]
+        let audit_output_enabled = audit_file.is_some();
 
         if let Some(audit_file) = audit_file {
             tokio::spawn(async move {
@@ -201,6 +222,7 @@ impl DnsAuditMiddleware {
             query_log,
             audit_soa,
             audit_console,
+            audit_output_enabled,
         }
     }
 }
@@ -210,7 +232,11 @@ pub struct DnsAuditRecord {
     id: u16,
     client: String,
     query: Query,
-    result: Result<DnsResponse, DnsError>,
+    /// 查询是否成功（WebUI 查询日志只需要此信息）。
+    result_ok: bool,
+    /// 结果明细（"rdata ttl type" 竖线分隔；失败时为 "query failed"）。
+    /// 仅在启用磁盘/syslog 审计时格式化，避免热路径上的全量 Message 克隆。
+    result_detail: Option<String>,
     speed: Duration,
     elapsed: Duration,
     date: DateTime<Local>,
@@ -218,33 +244,12 @@ pub struct DnsAuditRecord {
 }
 
 impl DnsAuditRecord {
-    fn fmt_result(&self) -> String {
-        if let Ok(lookup) = self.result.as_ref() {
-            let mut out = String::new();
-
-            for (i, record) in lookup
-                .records()
-                .iter()
-                // .filter(|r| r.data().is_some())
-                .enumerate()
-            {
-                let data = record.data();
-
-                if i > 0 {
-                    out.push('|');
-                }
-
-                out.push_str(data.to_string().as_str());
-
-                out.push(' ');
-                out.push_str(record.ttl().to_string().as_str());
-                out.push(' ');
-                out.push_str(record.record_type().to_string().as_str());
-            }
-            out
+    fn fmt_result(&self) -> &str {
+        self.result_detail.as_deref().unwrap_or(if self.result_ok {
+            ""
         } else {
-            "query failed".to_string()
-        }
+            "query failed"
+        })
     }
 
     fn to_string_without_date(&self) -> String {
@@ -273,6 +278,37 @@ impl std::fmt::Display for DnsAuditRecord {
             self.speed,
             self.fmt_result()
         )
+    }
+}
+
+/// 将查询结果格式化为 "rdata ttl type" 竖线分隔的明细字符串。
+/// 仅在启用审计输出时调用（热路径外）。
+fn fmt_result_detail(result: &Result<DnsResponse, DnsError>) -> String {
+    if let Ok(lookup) = result.as_ref() {
+        let mut out = String::new();
+
+        for (i, record) in lookup
+            .records()
+            .iter()
+            // .filter(|r| r.data().is_some())
+            .enumerate()
+        {
+            let data = record.data();
+
+            if i > 0 {
+                out.push('|');
+            }
+
+            out.push_str(data.to_string().as_str());
+
+            out.push(' ');
+            out.push_str(record.ttl().to_string().as_str());
+            out.push(' ');
+            out.push_str(record.record_type().to_string().as_str());
+        }
+        out
+    } else {
+        "query failed".to_string()
     }
 }
 
@@ -335,12 +371,12 @@ fn record_audit_to_file(
                 audit.query.query_type().to_string().as_str(),
                 format!("{:?}", audit.elapsed).as_str(),
                 format!("{:?}", audit.speed).as_str(),
-                if audit.result.is_ok() {
+                if audit.result_ok {
                     "success"
                 } else {
                     "failed"
                 },
-                audit.fmt_result().as_str(),
+                audit.fmt_result(),
                 format!("{:?}", audit.lookup_source).as_str(),
             ])?;
         }
@@ -381,7 +417,8 @@ mod tests {
             date: now,
             client: "127.0.0.1".to_string(),
             query,
-            result,
+            result_ok: result.is_ok(),
+            result_detail: Some(fmt_result_detail(&result)),
             elapsed: Duration::from_millis(10),
             speed: Duration::from_millis(11),
             lookup_source: LookupFrom::Server("default".to_string()),
@@ -411,7 +448,8 @@ mod tests {
             date: now,
             client: "127.0.0.1".to_string(),
             query,
-            result,
+            result_ok: result.is_ok(),
+            result_detail: Some(fmt_result_detail(&result)),
             elapsed: Duration::from_millis(10),
             speed: Duration::from_millis(11),
             lookup_source: LookupFrom::Server("default".to_string()),
@@ -439,7 +477,8 @@ mod tests {
             date: now,
             client: "127.0.0.1".to_string(),
             query,
-            result,
+            result_ok: result.is_ok(),
+            result_detail: Some(fmt_result_detail(&result)),
             elapsed: Duration::from_millis(10),
             speed: Duration::from_millis(11),
             lookup_source: LookupFrom::Server("default".to_string()),
@@ -490,7 +529,8 @@ mod tests {
             date: "2022-11-11 20:18:11.099966887 +08:00".parse().unwrap(),
             client: "127.0.0.1".to_string(),
             query: query.clone(),
-            result: result.clone(),
+            result_ok: result.is_ok(),
+            result_detail: Some(fmt_result_detail(&result)),
             elapsed: Duration::from_millis(10),
             speed: Duration::from_millis(11),
             lookup_source: LookupFrom::Server("default1".to_string()),
@@ -501,7 +541,8 @@ mod tests {
             date: "2022-11-11 20:18:11.099966887 +08:00".parse().unwrap(),
             client: "127.0.0.1".to_string(),
             query,
-            result,
+            result_ok: result.is_ok(),
+            result_detail: Some(fmt_result_detail(&result)),
             elapsed: Duration::from_millis(10),
             speed: Duration::from_millis(11),
             lookup_source: LookupFrom::Server("default2".to_string()),
