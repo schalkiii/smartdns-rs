@@ -33,6 +33,17 @@ use crate::{app::App, server::DnsHandle};
 type StatefulRouter = Router<Arc<ServeState>>;
 pub use openapi::ToSchema;
 
+/// 串行化托管配置（address.conf / domain-set.conf）的读-改-写：
+/// 订阅 API 与 address API 同写 address.conf，无锁并发会丢更新。
+pub(crate) static MANAGED_CONF_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// 托管配置原子写回：临时文件 + rename，避免崩溃截断配置。
+pub(crate) fn write_managed_conf(file: &std::path::Path, text: &str) -> std::io::Result<()> {
+    let tmp = file.with_extension("conf.tmp");
+    std::fs::write(&tmp, text)?;
+    std::fs::rename(&tmp, file)
+}
+
 pub struct ServeState {
     pub app: App,
     pub dns_handle: DnsHandle,

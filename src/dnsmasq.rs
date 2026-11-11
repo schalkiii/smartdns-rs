@@ -66,6 +66,7 @@ impl LeaseMappings {
 ///
 /// The cache is protected by `RwLock` and accessed via `Arc` for
 /// efficient read-heavy operations (DNS lookups).
+#[derive(Clone)]
 struct LeaseCache {
     /// Clients indexed by hostname
     clients: Arc<DomainMap<Arc<ClientInfo>>>,
@@ -88,8 +89,8 @@ const IPV6_NEIGHBOR_CACHE_REFRESH: Duration = Duration::from_secs(2);
 /// - **IPv4**: Direct lookup by IP address from the lease file
 /// - **IPv6**: Lookup via neighbor cache (MAC address) when IP is not in the lease file
 ///
-/// The neighbor cache is automatically refreshed by running `ip -6 neigh` command
-/// every 2 seconds, keeping the cache up to date with network changes.
+/// The neighbor cache is refreshed on demand (at most once per 2 seconds) by
+/// running `ip -6 neigh`, keeping the cache up to date with network changes.
 pub struct LanClientStore {
     /// DNS zone for name resolution
     zone: Option<Name>,
@@ -101,6 +102,25 @@ pub struct LanClientStore {
     cache: RwLock<Option<LeaseCache>>,
     /// IPv6 neighbor cache (enabled automatically when dnsmasq lease file is configured)
     neighbor_cache: Option<Arc<NeighborStore>>,
+}
+
+// RwLock 不实现 Clone；构建链（with_odhcpd_file）需要克隆空 store，
+// 邻居缓存共享同一份，租约缓存按值克隆。
+impl Clone for LanClientStore {
+    fn clone(&self) -> Self {
+        Self {
+            zone: self.zone.clone(),
+            file: self.file.clone(),
+            odhcpd_file: self.odhcpd_file.clone(),
+            cache: RwLock::new(
+                self.cache
+                    .read()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .clone(),
+            ),
+            neighbor_cache: self.neighbor_cache.clone(),
+        }
+    }
 }
 
 impl LanClientStore {
@@ -122,7 +142,13 @@ impl LanClientStore {
             file: Some(file.as_ref().to_owned()),
             odhcpd_file: None,
             cache: Default::default(),
-            neighbor_cache: Some(Arc::new(NeighborStore::new())),
+            // `ip -6 neigh` 仅 Linux 可用；其它平台不启用，避免每次 IPv6 PTR 白起进程。
+            // 测试环境保留启用（命令被 mock），保证 MAC 路径跨平台可测。
+            neighbor_cache: if cfg!(any(target_os = "linux", test)) {
+                Some(Arc::new(NeighborStore::new()))
+            } else {
+                None
+            },
         }
     }
 
@@ -207,7 +233,7 @@ impl LanClientStore {
         .ok();
 
         let mut cache = self.cache.write().unwrap_or_else(|err| err.into_inner());
-        if let Some(lease_mappings) = refreshed {
+        let clients = if let Some(lease_mappings) = refreshed {
             *cache = Some(LeaseCache {
                 clients: Arc::new(lease_mappings.name_to_client),
                 ip_clients: Arc::new(lease_mappings.ip_to_client),
@@ -215,8 +241,6 @@ impl LanClientStore {
                 modified_at,
                 checked_at: now,
             });
-            // Refresh neighbor cache for IPv6 reverse lookup
-            let _ = self.refresh_neighbor_cache();
             Some(cache.as_ref().unwrap().clients.clone())
         } else if let Some(cache) = cache.as_mut() {
             // read failed, keep existing cache and avoid hot-loop retries.
@@ -224,7 +248,14 @@ impl LanClientStore {
             Some(cache.clients.clone())
         } else {
             None
+        };
+        drop(cache);
+
+        // 邻居缓存刷新会起子进程，必须在租约写锁之外执行
+        if clients.is_some() {
+            let _ = self.refresh_neighbor_cache();
         }
+        clients
     }
 
     /// Forward lookup: resolve hostname to IP address.
@@ -232,6 +263,9 @@ impl LanClientStore {
     /// Supports A (IPv4) and AAAA (IPv6) record types.
     /// Handles zone suffix appending if configured.
     pub fn lookup(&self, name: &Name, record_type: RecordType) -> Option<RData> {
+        if !matches!(record_type, RecordType::A | RecordType::AAAA) {
+            return None;
+        }
         let store = self.cached_clients()?;
 
         let mut name = name.clone();
@@ -269,27 +303,31 @@ impl LanClientStore {
     }
 
     pub fn reverse_lookup(&self, ip: &IpAddr) -> Option<RData> {
-        let cache = self.cache.read().unwrap_or_else(|err| err.into_inner());
-        let lease_cache = cache.as_ref()?;
+        // 先克隆索引 Arc 再释放读锁：邻居缓存刷新会起子进程，不能持锁执行
+        let (ip_clients, mac_clients) = {
+            let cache = self.cache.read().unwrap_or_else(|err| err.into_inner());
+            let lease_cache = cache.as_ref()?;
+            (
+                lease_cache.ip_clients.clone(),
+                lease_cache.mac_clients.clone(),
+            )
+        };
 
         // Try direct IP lookup from lease file (works for both IPv4 and IPv6)
-        if let Some(client_info) = lease_cache.ip_clients.get(ip) {
-            // Skip placeholder hostnames like "*"
-            if client_info.host.to_string() != "*" {
-                return Some(RData::PTR(PTR(client_info.host.clone())));
-            }
+        if let Some(client_info) = ip_clients.get(ip)
+            && !is_placeholder_host(&client_info.host)
+        {
+            return Some(RData::PTR(PTR(client_info.host.clone())));
         }
 
         // For IPv6, try MAC-based lookup as fallback
         // Only try this if neighbor_cache is enabled
         if let Some(ref neighbor_cache) = self.neighbor_cache
             && let Some(mac) = neighbor_cache.lookup(ip)
-            && let Some(client_info) = lease_cache.mac_clients.get(&mac)
+            && let Some(client_info) = mac_clients.get(&mac)
+            && !is_placeholder_host(&client_info.host)
         {
-            // Skip placeholder hostnames like "*"
-            if client_info.host.to_string() != "*" {
-                return Some(RData::PTR(PTR(client_info.host.clone())));
-            }
+            return Some(RData::PTR(PTR(client_info.host.clone())));
         }
 
         None
@@ -302,15 +340,20 @@ impl LanClientStore {
         let lease_cache = cache.as_ref()?;
 
         // Look up by MAC address
-        if let Some(client_info) = lease_cache.mac_clients.get(&mac.to_lowercase()) {
-            // Skip placeholder hostnames like "*"
-            if client_info.host.to_string() != "*" {
-                return Some(RData::PTR(PTR(client_info.host.clone())));
-            }
+        if let Some(client_info) = lease_cache.mac_clients.get(&mac.to_lowercase())
+            && !is_placeholder_host(&client_info.host)
+        {
+            return Some(RData::PTR(PTR(client_info.host.clone())));
         }
 
         None
     }
+}
+
+/// 租约主机名占位符 `*` 判定。Name 带 fqdn 后缀，`to_string() == "*"` 恒不成立，
+/// 须按 label 比较。
+fn is_placeholder_host(host: &Name) -> bool {
+    host.num_labels() == 1 && host.iter().next().is_some_and(|label| label == b"*")
 }
 
 /// Client information from dnsmasq lease files.
@@ -545,8 +588,8 @@ pub fn ptr_to_ip(name: &Name) -> Result<IpAddr, std::net::AddrParseError> {
 /// IPv6 neighbor cache for MAC address lookup.
 ///
 /// This stores the mapping from IPv6 addresses to MAC addresses obtained
-/// from `ip -6 neigh` output. It is automatically refreshed every 2 seconds
-/// to keep the cache up to date with network changes.
+/// from `ip -6 neigh` output. It is refreshed on demand (at most once per
+/// 2 seconds) to keep the cache up to date with network changes.
 ///
 /// # Usage
 ///
@@ -556,8 +599,10 @@ pub fn ptr_to_ip(name: &Name) -> Result<IpAddr, std::net::AddrParseError> {
 struct NeighborStore {
     /// IPv6 → MAC mapping
     cache: RwLock<HashMap<IpAddr, String>>,
-    /// Last time the cache was refreshed
+    /// Last time a refresh was attempted (success or failure)
     checked_at: RwLock<Instant>,
+    /// single-flight：并发查询只允许一个刷新在跑，其余直接用旧缓存
+    refreshing: std::sync::Mutex<()>,
 }
 
 impl NeighborStore {
@@ -566,42 +611,81 @@ impl NeighborStore {
         Self {
             cache: RwLock::new(HashMap::new()),
             checked_at: RwLock::new(Instant::now()),
+            refreshing: std::sync::Mutex::new(()),
         }
     }
 
     /// Refresh the neighbor cache by running `ip -6 neigh` command.
     ///
-    /// This parses the output and updates the internal cache with
-    /// IPv6 → MAC mappings.
+    /// Parses the output into a new map and swaps it in only on success;
+    /// failures keep the old cache. `checked_at` is updated even on failure
+    /// so a broken environment backs off instead of retrying per query.
     fn refresh(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let Ok(_guard) = self.refreshing.try_lock() else {
+            return Ok(());
+        };
+        *self
+            .checked_at
+            .write()
+            .unwrap_or_else(|err| err.into_inner()) = Instant::now();
+
         let output = Self::run_ip_neigh_command()?;
 
         if !output.status.success() {
-            // If command fails, just return without updating cache
+            // If command fails, keep the existing cache.
             // This is OK for systems without IPv6 or without ip command
             return Ok(());
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut cache = self.cache.write().unwrap();
-        cache.clear();
-
+        let mut new_cache = HashMap::new();
         for line in stdout.lines() {
             if let Some((ipv6, mac)) = parse_neigh_line(line) {
-                cache.insert(ipv6, mac);
+                new_cache.insert(ipv6, mac);
             }
         }
 
-        *self.checked_at.write().unwrap() = Instant::now();
+        *self.cache.write().unwrap_or_else(|err| err.into_inner()) = new_cache;
         Ok(())
     }
 
-    /// Execute the ip -6 neigh command - override in tests
+    /// Execute the ip -6 neigh command with a bounded wait so a stuck
+    /// netlink call cannot block the caller indefinitely.
     #[cfg(not(test))]
     fn run_ip_neigh_command() -> Result<std::process::Output, std::io::Error> {
-        std::process::Command::new("ip")
+        use std::io::Read;
+
+        let mut child = std::process::Command::new("ip")
             .args(["-6", "neigh"])
-            .output()
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()?;
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match child.try_wait()? {
+                Some(status) => {
+                    let mut stdout = Vec::new();
+                    if let Some(mut out) = child.stdout.take() {
+                        out.read_to_end(&mut stdout)?;
+                    }
+                    return Ok(std::process::Output {
+                        status,
+                        stdout,
+                        stderr: vec![],
+                    });
+                }
+                None if Instant::now() >= deadline => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "ip -6 neigh timed out",
+                    ));
+                }
+                None => std::thread::sleep(Duration::from_millis(10)),
+            }
+        }
     }
 
     /// Test mock for ip -6 neigh command
@@ -659,13 +743,20 @@ impl NeighborStore {
         }
 
         // Check if cache needs refresh (older than 2 seconds)
-        let checked_at = *self.checked_at.read().unwrap();
+        let checked_at = *self
+            .checked_at
+            .read()
+            .unwrap_or_else(|err| err.into_inner());
         if checked_at.elapsed() > IPV6_NEIGHBOR_CACHE_REFRESH {
             // Refresh on demand to avoid frequent system calls
             let _ = self.refresh();
         }
 
-        self.cache.read().unwrap().get(ipv6).cloned()
+        self.cache
+            .read()
+            .unwrap_or_else(|err| err.into_inner())
+            .get(ipv6)
+            .cloned()
     }
 }
 
@@ -1161,30 +1252,40 @@ mod tests {
         // First trigger cache initialization (which will also refresh neighbor_store via mock)
         let _ = store.lookup(&"Andy-PC".parse().unwrap(), RecordType::A);
 
-        // Test IPv6 reverse lookup using MAC from neighbor store
-        // This IP is NOT in the lease file, so it must use neighbor store lookup
-        let ip: IpAddr = "2402:4e00:1013:e500:0:9671:f018:4947".parse().unwrap();
+        // …5555 不在租约文件中，必须走邻居缓存 → MAC（c5:65:92:0b:b5:72）→ Andy-PC
+        let ip: IpAddr = "2402:4e00:1013:e500:0:9671:f018:5555".parse().unwrap();
         let rdata = store.reverse_lookup(&ip);
 
         if let Some(RData::PTR(ptr)) = rdata {
             assert_eq!(
                 ptr.0.to_string(),
-                "iphone-abc.",
-                "IPv6 hostname should match lease file"
+                "andy-pc.",
+                "IPv6 hostname should match lease file via MAC"
             );
+        } else {
+            panic!("Expected PTR via neighbor/MAC path");
         }
 
-        // Should find the hostname via MAC lookup (34:ef:50:f4:6d:be -> c5:65:92:0b:b5:72 -> Andy-PC)
-        // Note: This test expects the MAC from neighbor store to match one in lease file
-        // In this case, 34:ef:50:f4:6d:be doesn't match c5:65:92:0b:b5:72, so it returns None
-        // This is actually correct behavior - the mock data doesn't match the lease file
-
-        // Let's verify the neighbor cache was refreshed correctly
         assert!(store.neighbor_cache.is_some());
 
         // Check that the mock data was loaded
         let cache = store.neighbor_cache.as_ref().unwrap().cache.read().unwrap();
         assert!(cache.contains_key(&ip));
+    }
+
+    #[test]
+    fn test_reverse_lookup_skips_placeholder_host() {
+        // 租约主机名为 "*" 时不应返回 PTR（占位符不是真实主机名）
+        let path = std::env::temp_dir().join("smartdns-test-placeholder.leases");
+        std::fs::write(&path, "1702763919 aa:bb:cc:dd:ee:ff 192.168.100.99 *\n").unwrap();
+
+        let store = LanClientStore::new(&path, None);
+        let _ = store.lookup(&"whatever".parse().unwrap(), RecordType::A);
+
+        let ip: IpAddr = "192.168.100.99".parse().unwrap();
+        assert!(store.reverse_lookup(&ip).is_none());
+
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

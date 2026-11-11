@@ -42,6 +42,7 @@ async fn create(
     State(state): State<Arc<ServeState>>,
     Json(input): Json<CreateAddressRule>,
 ) -> Result<StatusCode, ApiError> {
+    let _guard = super::MANAGED_CONF_LOCK.lock().await;
     let rule = input.rule;
     let cfg = state.app.cfg().await;
     let Some(managed_dir) = cfg.managed_dir() else {
@@ -94,10 +95,10 @@ async fn create(
                     | ConfigLine::EmptyLine
             )
         });
-        std::fs::write(&file, format!("{config}"))?;
+        super::write_managed_conf(&file, &format!("{config}"))?;
     } else {
         let config = ConfigItem::Address(rule);
-        std::fs::write(&file, format!("{config}"))?;
+        super::write_managed_conf(&file, &format!("{config}"))?;
     }
 
     state.app.reload().await?;
@@ -113,6 +114,7 @@ async fn delete(
     State(state): State<Arc<ServeState>>,
     Json(input): Json<DeleteAddressRule>,
 ) -> Result<StatusCode, ApiError> {
+    let _guard = super::MANAGED_CONF_LOCK.lock().await;
     let domain = input.domain;
 
     let cfg = state.app.cfg().await;
@@ -162,7 +164,7 @@ async fn delete(
                 | ConfigLine::EmptyLine
         )
     });
-    std::fs::write(&file, format!("{config}"))?;
+    super::write_managed_conf(&file, &format!("{config}"))?;
 
     state.app.reload().await?;
 

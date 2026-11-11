@@ -113,6 +113,7 @@ async fn create(
     State(state): State<Arc<ServeState>>,
     Json(input): Json<CreateDomainSet>,
 ) -> Result<StatusCode, ApiError> {
+    let _guard = super::MANAGED_CONF_LOCK.lock().await;
     let provider = build_provider(&input)?;
 
     let cfg = state.app.cfg().await;
@@ -159,6 +160,7 @@ async fn update(
     State(state): State<Arc<ServeState>>,
     Json(input): Json<UpdateDomainSet>,
 ) -> Result<StatusCode, ApiError> {
+    let _guard = super::MANAGED_CONF_LOCK.lock().await;
     let cfg = state.app.cfg().await;
     let Some(managed_dir) = cfg.managed_dir().map(|p| p.to_path_buf()) else {
         return Err(ApiError::NotFound("managed_dir not found".to_string()));
@@ -182,6 +184,7 @@ async fn update(
     };
 
     let new_name = input.new_name.clone().unwrap_or_else(|| input.name.clone());
+    validate_name(&new_name)?;
 
     // 改名时检查新名称冲突
     if new_name != input.name && find_provider_idx(&config, &new_name).is_some() {
@@ -201,12 +204,12 @@ async fn update(
 
     let new_provider = match old {
         DomainSetProvider::File(f) => DomainSetProvider::File(DomainSetFileProvider {
-            name: new_name,
+            name: new_name.clone(),
             file: f.file.clone(),
             content_type: f.content_type.clone(),
         }),
         DomainSetProvider::Http(h) => DomainSetProvider::Http(DomainSetHttpProvider {
-            name: new_name,
+            name: new_name.clone(),
             url: input
                 .url
                 .as_deref()
@@ -223,6 +226,12 @@ async fn update(
     };
 
     write_provider_only(&file, &mut config)?;
+
+    // 改名时联动迁移 address 拦截行，否则旧名失联、拦截静默失效
+    if new_name != input.name {
+        link_address_rule(&managed_dir, &input.name, false)?;
+        link_address_rule(&managed_dir, &new_name, true)?;
+    }
     drop(cfg);
     state.app.reload().await?;
 
@@ -235,6 +244,7 @@ async fn delete(
     State(state): State<Arc<ServeState>>,
     Json(input): Json<DeleteDomainSet>,
 ) -> Result<StatusCode, ApiError> {
+    let _guard = super::MANAGED_CONF_LOCK.lock().await;
     let cfg = state.app.cfg().await;
     let Some(managed_dir) = cfg.managed_dir().map(|p| p.to_path_buf()) else {
         return Err(ApiError::NotFound("managed_dir not found".to_string()));
@@ -328,6 +338,7 @@ async fn stats(State(state): State<Arc<ServeState>>) -> Json<AdblockStats> {
 // ---------- helpers ----------
 
 fn build_provider(input: &CreateDomainSet) -> Result<DomainSetProvider, ApiError> {
+    validate_name(&input.name)?;
     let content_type = match input.content_type.to_lowercase().as_str() {
         "" | "list" => DomainSetContentType::List,
         "adblock" => DomainSetContentType::Adblock,
@@ -341,6 +352,13 @@ fn build_provider(input: &CreateDomainSet) -> Result<DomainSetProvider, ApiError
     if let Some(url) = &input.url {
         let url =
             Url::parse(url).map_err(|e| ApiError::Internal(anyhow::anyhow!("invalid url: {e}")))?;
+        // 订阅下载只允许 http/https，杜绝 file:// 等 scheme 读本地任意文件
+        if !matches!(url.scheme(), "http" | "https") {
+            return Err(ApiError::Internal(anyhow::anyhow!(
+                "unsupported url scheme: {} (expect http/https)",
+                url.scheme()
+            )));
+        }
         Ok(DomainSetProvider::Http(DomainSetHttpProvider {
             name: input.name.clone(),
             url,
@@ -348,6 +366,12 @@ fn build_provider(input: &CreateDomainSet) -> Result<DomainSetProvider, ApiError
             content_type,
         }))
     } else if let Some(file) = &input.file {
+        // 序列化按空格分词：含空白/控制字符的路径会破坏 round-trip
+        if file.is_empty() || file.chars().any(|c| c.is_whitespace() || c.is_control()) {
+            return Err(ApiError::Internal(anyhow::anyhow!(
+                "invalid file path: {file:?} (whitespace/control chars not allowed)"
+            )));
+        }
         Ok(DomainSetProvider::File(DomainSetFileProvider {
             name: input.name.clone(),
             file: file.into(),
@@ -358,6 +382,22 @@ fn build_provider(input: &CreateDomainSet) -> Result<DomainSetProvider, ApiError
             "either url or file is required"
         )))
     }
+}
+
+/// name 会原样序列化进配置行并被 `domain-set:<name>` 引用：
+/// 限定字符集，避免空白/换行破坏解析或注入杂散配置行。
+fn validate_name(name: &str) -> Result<(), ApiError> {
+    if name.is_empty()
+        || name.len() > 64
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(ApiError::Internal(anyhow::anyhow!(
+            "invalid domain-set name: {name:?} (expect 1-64 chars of [A-Za-z0-9_-])"
+        )));
+    }
+    Ok(())
 }
 
 fn find_provider_idx(config: &ConfigFile<'_>, name: &str) -> Option<usize> {
@@ -386,15 +426,15 @@ fn write_provider_only(
                 | ConfigLine::EmptyLine
         )
     });
-    std::fs::write(file, format!("{config}"))?;
+    super::write_managed_conf(file, &format!("{config}"))?;
     Ok(())
 }
 
 /// 维护 managed/address.conf 中的 `address /domain-set:<name>/#` 拦截行。
 ///
 /// `link = true` 时追加（已存在则跳过）；`link = false` 时移除。
-/// 订阅（domain-set）只是域名集合定义，需 address 规则引用才产生拦截；
-/// WebUI 的订阅语义是「添加即拦截、删除即放行」，故随增删联动维护。
+/// 只认领 SOA 族拦截行：用户手写的 `address /domain-set:<name>/<ip>` 绑定
+/// 不属于订阅联动范围，增删订阅不得误删。
 fn link_address_rule(
     managed_dir: &std::path::Path,
     name: &str,
@@ -403,6 +443,13 @@ fn link_address_rule(
     let file = managed_dir.join("address.conf");
 
     let target_domain = Domain::Set(name.to_string());
+    let is_linked_rule = |rule: &AddressRule| {
+        rule.domain == target_domain
+            && matches!(
+                rule.address,
+                AddressRuleValue::SOA | AddressRuleValue::SOAv4 | AddressRuleValue::SOAv6
+            )
+    };
 
     // ConfigFile 借用解析文本：text 须与 config 同生命周期
     let text = if file.exists() {
@@ -413,19 +460,20 @@ fn link_address_rule(
     let (_, mut config) = ConfigFile::parse(&text).map_err(|err| err.to_owned())?;
 
     // 仅处理 address 行（与 address API 同模式，其它行原样保留）
-    let existing_idx = config.iter().position(|line| {
-        matches!(
-            line,
+    let linked_idxs: Vec<usize> = config
+        .iter()
+        .enumerate()
+        .filter_map(|(i, line)| match line {
             ConfigLine::Config {
                 config: ConfigItem::Address(rule),
                 ..
-            } if rule.domain == target_domain
-        )
-    });
+            } if is_linked_rule(rule) => Some(i),
+            _ => None,
+        })
+        .collect();
 
-    match (link, existing_idx) {
-        (true, Some(_)) => {} // 已有关联行，幂等
-        (true, None) => {
+    let changed = match link {
+        true if linked_idxs.is_empty() => {
             config.push(ConfigLine::Config {
                 config: ConfigItem::Address(AddressRule {
                     domain: target_domain,
@@ -433,33 +481,29 @@ fn link_address_rule(
                 }),
                 comment: None,
             });
-            config.retain(|line| {
-                matches!(
-                    line,
-                    ConfigLine::Config {
-                        config: ConfigItem::Address(_),
-                        ..
-                    } | ConfigLine::Comment(_)
-                        | ConfigLine::EmptyLine
-                )
-            });
-            std::fs::write(&file, format!("{config}"))?;
+            true
         }
-        (false, Some(idx)) => {
-            config.remove(idx);
-            config.retain(|line| {
-                matches!(
-                    line,
-                    ConfigLine::Config {
-                        config: ConfigItem::Address(_),
-                        ..
-                    } | ConfigLine::Comment(_)
-                        | ConfigLine::EmptyLine
-                )
-            });
-            std::fs::write(&file, format!("{config}"))?;
+        false if !linked_idxs.is_empty() => {
+            for i in linked_idxs.iter().rev() {
+                config.remove(*i);
+            }
+            true
         }
-        (false, None) => {} // 无关联行，幂等
+        _ => false, // 幂等
+    };
+
+    if changed {
+        config.retain(|line| {
+            matches!(
+                line,
+                ConfigLine::Config {
+                    config: ConfigItem::Address(_),
+                    ..
+                } | ConfigLine::Comment(_)
+                    | ConfigLine::EmptyLine
+            )
+        });
+        super::write_managed_conf(&file, &format!("{config}"))?;
     }
 
     Ok(())

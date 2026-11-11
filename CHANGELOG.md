@@ -4,6 +4,29 @@
 
 ## [Unreleased]
 
+### fix: 新特性审查修复（TCP 背压 / 拦截统计 / 邻居缓存 / 订阅 API 安全）
+
+对 #748 / #740 / adblock 订阅这批新改动的审查修复：
+
+- `server/tcp`：pipelined 并发应答加每连接 in-flight 上限（32，与 hickory
+  出站队列同容量）——读循环等空位形成背压，单连接不再能无界 spawn 饿死
+  全局查询槽，也避免队满时 `try_send` 静默丢应答。
+- `dns_mw_addr`：`ctx.blocked` 仅对 SOA 族 address 规则命中置位；
+  force-AAAA-SOA / force-qtype-SOA 全局策略与 IP 改写不再计入 adblock
+  拦截统计（默认配置含 `force-qtype-soa 65`，此前开箱即失真）。
+- `dnsmasq`：邻居缓存仅 Linux 启用（其它平台不再每次 IPv6 PTR 白起 `ip`
+  进程）；`ip -6 neigh` 加 2s 超时与 single-flight，失败也退避 2s；解析成功
+  才整表 swap（失败不清缓存）；刷新移出租约写锁、PTR/正向查询走
+  `spawn_blocking` 不占 tokio worker；恢复 A/AAAA 类型守卫；占位符 `*`
+  改按 label 比较（fqdn 后缀使 `to_string() == "*"` 恒不成立）；修正
+  「邻居路径」测试实际走直连 IP 分支的问题并补占位符用例。
+- `api/domain-sets`：name 限定 `[A-Za-z0-9_-]{1,64}`、file 禁空白/控制字符
+  （序列化 round-trip 安全）、url 仅 http/https；托管配置读-改-写与
+  address API 共享串行锁并原子写回（临时文件+rename）；改名联动迁移
+  address 拦截行；unlink 只认领 SOA 族行，不误删用户手写 IP 绑定。
+- `infra/http_client`：下载加 30s 全局超时与 32MiB 体积上限（ureq/reqwest
+  两后端），慢 URL/巨文件不再无限阻塞或 OOM 热更新路径。
+
 ### fix(webui): 修复 package-lock.json 与静态产物入库损坏（TSD 污染）
 
 0e1c1396 提交时 `webui/package-lock.json` 与 `webui/out/` 40 个文件被沙箱

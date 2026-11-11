@@ -1,7 +1,8 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use tokio::{net, task::JoinSet};
+use tokio::{net, sync::Semaphore, task::JoinSet};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -67,6 +68,9 @@ pub fn serve(
                 // (RFC 7766 §6.2.1.1), so one slow upstream lookup doesn't stall the
                 // whole connection.
                 let mut request_set = JoinSet::new();
+                // hickory 出站队列容量为 32：in-flight 限到同值既保证 try_send
+                // 不会因队满丢应答，也形成每连接背压（读循环等空位才继续读）。
+                let in_flight = Arc::new(Semaphore::new(32));
 
                 while let Ok(Some(message)) = buf_stream.next().timeout(timeout).await {
                     let message = match message {
@@ -86,7 +90,11 @@ pub fn serve(
                     let req_message = SerialMessage::binary(bytes, addr, Protocol::Tcp);
                     let handler = handler.clone();
                     let mut stream_handle = stream_handle.clone();
+                    let Ok(permit) = in_flight.clone().acquire_owned().await else {
+                        return;
+                    };
                     request_set.spawn(async move {
+                        let _permit = permit;
                         let res_message = handler.send(req_message).await;
                         if let Err(err) = res_message
                             .try_into()

@@ -54,7 +54,7 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for AddressMiddle
     ) -> Result<DnsResponse, DnsError> {
         let query_type = req.query().query_type();
 
-        if let Some(rdatas) = handle_rule_addr(query_type, req.query().name(), ctx) {
+        if let Some((rdatas, blocked)) = handle_rule_addr(query_type, req.query().name(), ctx) {
             let local_ttl = ctx.cfg().local_ttl();
 
             let query = req.query().original().clone();
@@ -70,8 +70,9 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for AddressMiddle
             );
 
             ctx.source = LookupFrom::Static;
-            // address 拦截规则命中（含 adblock 订阅）：供审计统计识别真实拦截
-            ctx.blocked = true;
+            // 仅 SOA 族 address 规则命中算拦截（adblock 语义）；
+            // force-SOA 全局策略与 IP 改写不计入拦截统计
+            ctx.blocked = blocked;
             return Ok(lookup);
         }
 
@@ -145,11 +146,13 @@ impl Middleware<DnsContext, DnsRequest, DnsResponse, DnsError> for AddressMiddle
     }
 }
 
+/// 返回 (应答 rdata, 是否拦截)。拦截仅指 SOA 族 address 规则命中；
+/// force-SOA 与 IP 改写返回 false，避免污染 adblock 拦截统计。
 fn handle_rule_addr(
     query_type: RecordType,
     query_name: &Name,
     ctx: &DnsContext,
-) -> Option<Vec<RData>> {
+) -> Option<(Vec<RData>, bool)> {
     use RecordType::{A, AAAA, HTTPS};
 
     let cfg = ctx.cfg();
@@ -163,18 +166,18 @@ fn handle_rule_addr(
         match query_type {
             // force AAAA query return SOA
             AAAA if server_opts.force_aaaa_soa() || cfg.force_aaaa_soa() => {
-                return Some(vec![RData::default_soa()]);
+                return Some((vec![RData::default_soa()], false));
             }
             // force HTTPS query return SOA
             HTTPS if server_opts.force_https_soa() || cfg.force_https_soa() => {
-                return Some(vec![RData::default_soa()]);
+                return Some((vec![RData::default_soa()], false));
             }
             _ => (),
         }
 
         // force specific qtype return SOA
         if cfg.force_qtype_soa().contains(&query_type) {
-            return Some(vec![RData::default_soa()]);
+            return Some((vec![RData::default_soa()], false));
         }
     }
 
@@ -199,36 +202,41 @@ fn handle_rule_addr(
                     match query_type {
                         A => {
                             if let Some(v4) = v4 {
-                                return Some(v4.iter().map(|ip| RData::A((*ip).into())).collect());
+                                return Some((
+                                    v4.iter().map(|ip| RData::A((*ip).into())).collect(),
+                                    false,
+                                ));
                             }
                         }
                         AAAA => {
                             if let Some(v6) = v6 {
-                                return Some(
+                                return Some((
                                     v6.iter().map(|ip| RData::AAAA((*ip).into())).collect(),
-                                );
+                                    false,
+                                ));
                             }
 
                             if let Some(v4) = v4 {
-                                return Some(
+                                return Some((
                                     v4.iter()
                                         .map(|ip| RData::AAAA(ip.to_ipv6_mapped().into()))
                                         .collect(),
-                                );
+                                    false,
+                                ));
                             }
                         }
                         _ => return None,
                     }
                     if !no_rule_soa {
-                        return Some(vec![RData::default_soa()]);
+                        return Some((vec![RData::default_soa()], false));
                     }
                 }
-                SOA if !no_rule_soa => return Some(vec![RData::default_soa()]),
+                SOA if !no_rule_soa => return Some((vec![RData::default_soa()], true)),
                 SOAv4 if !no_rule_soa && query_type == A => {
-                    return Some(vec![RData::default_soa()]);
+                    return Some((vec![RData::default_soa()], true));
                 }
                 SOAv6 if !no_rule_soa && query_type == AAAA => {
-                    return Some(vec![RData::default_soa()]);
+                    return Some((vec![RData::default_soa()], true));
                 }
                 IGN => return None, // ignore rule
                 IGNv4 if query_type == A => return None,
@@ -806,5 +814,51 @@ mod tests {
         clamp_ttl_bounds(&mut records, Some(300), Some(600));
         assert_eq!(records[0].ttl(), 300);
         assert_eq!(records[1].ttl(), 600);
+    }
+
+    /// 拦截标记只认 SOA 族 address 规则：force-SOA 全局策略与 IP 改写
+    /// 不是 adblock 拦截，计入会让拦截统计开箱即失真。
+    #[test]
+    fn test_blocked_flag_only_for_soa_address_rules() {
+        let name: Name = "example.com".parse().unwrap();
+
+        let cfg = RuntimeConfig::builder()
+            .with("force-AAAA-SOA yes")
+            .build()
+            .unwrap();
+        let ctx = DnsContext::new(&name, std::sync::Arc::new(cfg), Default::default());
+        let (rdatas, blocked) = handle_rule_addr(RecordType::AAAA, &name, &ctx).unwrap();
+        assert!(matches!(rdatas[0], RData::SOA(_)));
+        assert!(!blocked, "force-AAAA-SOA 不应计为拦截");
+
+        let cfg = RuntimeConfig::builder()
+            .with("force-qtype-soa 65")
+            .build()
+            .unwrap();
+        let ctx = DnsContext::new(&name, std::sync::Arc::new(cfg), Default::default());
+        assert!(
+            !handle_rule_addr(RecordType::HTTPS, &name, &ctx).unwrap().1,
+            "force-qtype-soa 不应计为拦截"
+        );
+
+        let cfg = RuntimeConfig::builder()
+            .with("address /example.com/1.2.3.4")
+            .build()
+            .unwrap();
+        let ctx = DnsContext::new(&name, std::sync::Arc::new(cfg), Default::default());
+        assert!(
+            !handle_rule_addr(RecordType::A, &name, &ctx).unwrap().1,
+            "IP 改写不应计为拦截"
+        );
+
+        let cfg = RuntimeConfig::builder()
+            .with("address /example.com/#")
+            .build()
+            .unwrap();
+        let ctx = DnsContext::new(&name, std::sync::Arc::new(cfg), Default::default());
+        assert!(
+            handle_rule_addr(RecordType::A, &name, &ctx).unwrap().1,
+            "SOA address 规则应计为拦截"
+        );
     }
 }
