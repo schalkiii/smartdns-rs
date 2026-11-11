@@ -231,9 +231,20 @@ fn test_tokio_runtime_provider_with_proxy() {
 }
 
 /// 模拟 SmartDNS 高负载启动场景的压力测试：
-/// 多个并发 connection 创建触发 bind_udp，验证防 resource-busy 保护机制
+/// 多个并发 connection 创建触发 bind_udp，验证防 resource-busy 保护机制。
+///
+/// 现行机制为条件节流（见 socket_rate_limit_with）：健康态不强制间隔，
+/// 仅在最近 60s 出现过 WSAENOBUFS/ENOBUFS 后才启用 200ms 串行间隔。
+/// 本测试分两段验证：
+/// 1) 节流态：注入 resource-busy 标记后，并发 bind 被串行化（耗时下限）
+/// 2) 保护目标：全程无 resource busy 错误穿透
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn test_stress_multi_bind_udp_with_protection() {
+    // 串行执行：全局节流窗口（60s）会影响其它依赖稳态的用例
+    let _guard = lock_rate_limit_tests().await;
+    // 进入节流态：模拟最近出现过资源耗尽
+    mark_resource_busy();
+
     let provider = TokioRuntimeProvider::new(None, None, None);
     let total = 30;
     let mut handles = Vec::with_capacity(total);
@@ -284,9 +295,12 @@ async fn test_stress_multi_bind_udp_with_protection() {
         "resource busy 错误穿透了保护机制: {resource_busy} 次"
     );
 
+    // 节流态下 30 次串行 bind_udp，每次至少间隔 200ms → 总耗时不小于
+    // (total-1) × 200ms。留 5% 余量，避免调度抖动导致的偶发失败。
+    let min_elapsed = Duration::from_millis(200) * (total as u32 - 1) * 95 / 100;
     assert!(
-        elapsed >= Duration::from_millis(2800),
-        "保护机制疑似未生效：总耗时过短 {elapsed:?}"
+        elapsed >= min_elapsed,
+        "节流机制疑似未生效：{total} 次串行 bind 仅耗时 {elapsed:?}（期望 ≥ {min_elapsed:?}）"
     );
 }
 
