@@ -4,6 +4,43 @@
 
 ## [Unreleased]
 
+### feat(dnsmasq): IPv6 反向解析支持邻居缓存（来自上游 #740）
+
+`ip -6 neigh` 输出解析 + 租约 MAC 索引：IPv6 地址不在 dnsmasq/odhcpd 租约文件中时，
+通过内核邻居表反查 MAC，再经 MAC 索引找到对应主机名。与本地 odhcpd 双租约文件
+支持融合（保留双文件 mtime 合并检查，新增 MAC 维度索引）。
+
+### fix(server): TCP 连接内并发应答（来自上游 #748）
+
+原实现对同一 TCP 连接内的查询逐条串行等待应答（前一条应答发出前不读下一条），
+客户端 pipeline 化查询时排队延迟线性叠加。改为读/应答并发处理，同一连接内的
+多条查询可以并行走中间件链。新增 2 个 TCP pipelining 回归用例。
+
+### perf: 消除热路径的三处确定性分配
+
+- `dns_mw_audit`：每请求的 `res.clone()`（全量 DnsResponse/Message 深拷贝）改为
+  轻量摘要（`result_ok` + 按需格式化的 `result_detail`）；仅在存在磁盘/syslog
+  审计消费者时才格式化明细。顺带修复无消费者时接收端已 drop、`try_send` 必失败
+  导致的每请求一条 "audit queue full" WARN 噪声。
+- `app`：请求入口的 `qname.to_string()` 提前求值改为借用，tracing 惰性求值保证
+  debug 未启用时零分配。
+- `dns_mw_cache::entry_size`：`to_utf8()` String 分配改为 `Name::len()`（编码长度，
+  与 utf8 差至多 1，估算足够）。
+- 审计报告：`docs/AUDIT-REPORT-2026-11-11.md`（含未实施的候选优化清单）。
+
+### fix(tests): stress UDP bind 测试与条件节流机制对齐
+
+`c0f0e618` 把 socket 限速器改为条件节流后，stress 测试的 `elapsed >= 2800ms`
+断言仍在验证旧的无条件节流行为，健康环境下必败。改为注入 `mark_resource_busy()`
+进入节流态后验证 (total-1)×200ms 串行下限，并与其它限速用例互斥串行。
+全量 394 passed / 0 failed。
+
+### docs: adblock 格式订阅支持可行性评估
+
+`docs/EVAL-ADBLOCK-SUPPORT.md`：结论可行、难度低-中（1-2 天）、零新依赖。
+方案为新增 `domain-set -type adblock`，解析 `||domain^`（拦截集）/`@@||`（例外集，
+优先放行）/hosts 混合行，跳过 `##`/`$`/正则等浏览器层语法。
+
 ### ci: Test 工作流不再重复占用 macOS runner
 
 一次 push 会同时排 `test`、`cleanliness`、`compatibility` 三个 macOS 任务；macOS runner 抢不到时
