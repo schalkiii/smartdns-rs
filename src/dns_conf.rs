@@ -99,11 +99,15 @@ impl RuntimeConfig {
             }
             if conf_dir.is_none()
                 && let Some(dir) = path.parent()
-                && dir
-                    .file_stem()
-                    .map(|s| s.eq_ignore_ascii_case(crate::NAME))
-                    .unwrap_or_default()
             {
+                // conf_dir 取配置文件所在目录（managed/ 建于其下），不限定目录名：
+                // 发行包目录是 smartdns-<target>-<ver>，限定 smartdns 会使 managed_dir
+                // 为空，订阅/address API 全部 404。裸相对文件名 parent 为空，回退工作目录。
+                let dir = if dir.as_os_str().is_empty() {
+                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                } else {
+                    dir.to_path_buf()
+                };
                 builder = builder.with_conf_dir(dir);
             }
             path
@@ -2660,5 +2664,22 @@ mod tests {
             .build()
             .unwrap();
         assert_eq!(cfg.cache_file(), PathBuf::from("/var/cache/smartdns.cache"));
+    }
+
+    /// 回归：目录名不是 smartdns（如发行包目录 smartdns-<target>-<ver>）时，
+    /// `-c <file>` 也必须推导出 conf_dir/managed_dir，否则订阅/address API 全 404。
+    #[test]
+    fn test_load_derives_managed_dir_from_conf_file_parent() {
+        let dir = std::env::temp_dir().join("smartdns-x86_64-pc-windows-msvc-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let conf = dir.join("smartdns.conf");
+        std::fs::write(&conf, "server-name test\n").unwrap();
+
+        let cfg = RuntimeConfig::load(None, Some(&conf));
+        assert_eq!(cfg.conf_dir(), Some(dir.as_path()));
+        assert_eq!(cfg.managed_dir(), Some(dir.join("managed").as_path()));
+        assert!(dir.join("managed").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

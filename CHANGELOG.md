@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### fix(conf): 修复非 smartdns 命名目录下订阅/address API 全 404
+
+`RuntimeConfig::load` 原先只在配置文件父目录名恰为 `smartdns` 时才推导
+`conf_dir`，导致发行包目录（`smartdns-<target>-<ver>`）等场景 `managed_dir`
+为空，WebUI 添加订阅报 `404 managed_dir not found`。现改为始终取配置文件
+所在目录为 `conf_dir`（裸相对文件名回退工作目录），并补回归测试。
+
 ### fix: 新特性审查修复（TCP 背压 / 拦截统计 / 邻居缓存 / 订阅 API 安全）
 
 对 #748 / #740 / adblock 订阅这批新改动的审查修复：
