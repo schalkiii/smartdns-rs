@@ -122,9 +122,12 @@ async fn version() -> Json<&'static str> {
     Json(crate::BUILD_VERSION)
 }
 
+#[derive(Debug)]
 enum ApiError {
     Internal(anyhow::Error),
     NotFound(String),
+    /// 请求参数非法（400）：校验失败、输入与配置语义冲突等客户端可修正错误
+    BadRequest(String),
 }
 
 // Tell axum how to convert `AppError` into a response.
@@ -137,6 +140,7 @@ impl IntoResponse for ApiError {
             )
                 .into_response(),
             ApiError::NotFound(err) => (StatusCode::NOT_FOUND, err).into_response(),
+            ApiError::BadRequest(err) => (StatusCode::BAD_REQUEST, err).into_response(),
         }
     }
 }

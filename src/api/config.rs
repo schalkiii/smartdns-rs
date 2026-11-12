@@ -332,9 +332,12 @@ fn apply_scalar_updates(text: &str, updates: &BTreeMap<String, Option<String>>) 
 }
 
 /// 用真实解析器校验一行配置：必须完整消费且产出已知 ConfigItem。
+/// 校验 add/update 的配置行值。除 parse_config 语法校验外，还需通过
+/// round-trip 检查：值含 " #"（或制表符+#）时会被 split_conf_line 误拆为
+/// 尾注释，写回再读出后值被截断——在写入前显式拒绝，杜绝静默破坏。
 fn validate_conf_line(key: &str, value: &str) -> Result<(), ApiError> {
     if value.chars().any(|c| c.is_control()) {
-        return Err(ApiError::Internal(anyhow::anyhow!(
+        return Err(ApiError::BadRequest(format!(
             "configuration value contains control characters: {key:?}"
         )));
     }
@@ -344,11 +347,24 @@ fn validate_conf_line(key: &str, value: &str) -> Result<(), ApiError> {
         format!("{key} {value}")
     };
     match parse_config(&line) {
-        Ok(("", Some(_))) => Ok(()),
-        _ => Err(ApiError::Internal(anyhow::anyhow!(
-            "invalid configuration line: {line:?}"
-        ))),
+        Ok(("", Some(_))) => {}
+        _ => {
+            return Err(ApiError::BadRequest(format!(
+                "invalid configuration line: {line:?}"
+            )));
+        }
     }
+    // round-trip：重建行必须能原样拆出原值。值中含 " #"/"\t#" 时
+    // split_conf_line 会把其后内容当尾注释，值被静默截断。
+    if let Some((_, _, roundtrip_value, _)) = split_conf_line(&line)
+        && roundtrip_value != value
+    {
+        return Err(ApiError::BadRequest(format!(
+            "configuration value for {key:?} contains a comment separator (` #`); \
+             quoting is not supported, remove the `#` or move it to the comment field"
+        )));
+    }
+    Ok(())
 }
 
 async fn read_conf_file(state: &ServeState) -> Result<(std::path::PathBuf, String), ApiError> {
@@ -397,16 +413,16 @@ async fn put_options(
     let mut updates: BTreeMap<String, Option<String>> = BTreeMap::new();
     for (key, value) in &input.options {
         let canonical = canonical_scalar_key(key).ok_or_else(|| {
-            ApiError::Internal(anyhow::anyhow!("unknown or non-scalar option: {key:?}"))
+            ApiError::BadRequest(format!("unknown or non-scalar option: {key:?}"))
         })?;
         if let Some(value) = value {
             if value.is_empty() {
-                return Err(ApiError::Internal(anyhow::anyhow!(
+                return Err(ApiError::BadRequest(format!(
                     "empty value for {key:?}; use null to reset the option"
                 )));
             }
             if value.contains('#') {
-                return Err(ApiError::Internal(anyhow::anyhow!(
+                return Err(ApiError::BadRequest(format!(
                     "scalar value must not contain '#': {key:?}"
                 )));
             }
@@ -491,7 +507,7 @@ async fn get_lines(
     Query(query): Query<LinesQuery>,
 ) -> Result<Json<ConfigLines>, ApiError> {
     let keys = family_keys(&query.family).ok_or_else(|| {
-        ApiError::NotFound(format!("unknown config line family: {:?}", query.family))
+        ApiError::BadRequest(format!("unknown config line family: {:?}", query.family))
     })?;
     let (_, text) = read_conf_file(&state).await?;
     Ok(Json(ConfigLines {
@@ -508,10 +524,10 @@ async fn post_lines(
     let _guard = super::MANAGED_CONF_LOCK.lock().await;
 
     let keys = family_keys(&input.family).ok_or_else(|| {
-        ApiError::NotFound(format!("unknown config line family: {:?}", input.family))
+        ApiError::BadRequest(format!("unknown config line family: {:?}", input.family))
     })?;
     if !key_in_family(&input.key, keys) {
-        return Err(ApiError::Internal(anyhow::anyhow!(
+        return Err(ApiError::BadRequest(format!(
             "key {:?} does not belong to family {:?}",
             input.key,
             input.family
@@ -538,18 +554,20 @@ async fn post_lines(
         }
         LineAction::Update | LineAction::Delete => {
             let index = input.index.ok_or_else(|| {
-                ApiError::Internal(anyhow::anyhow!("index is required for update/delete"))
+                ApiError::BadRequest("index is required for update/delete".to_string())
             })?;
             let current = lines
                 .get(index)
                 .ok_or_else(|| ApiError::NotFound(format!("line index {index} out of range")))?;
             let (_, current_key, _, current_comment) =
                 split_conf_line(current).ok_or_else(|| {
-                    ApiError::Internal(anyhow::anyhow!("line {index} is not a configuration line"))
+                    ApiError::BadRequest(format!(
+                        "line {index} is not a configuration line"
+                    ))
                 })?;
             // 索引可能因并发编辑过期：目标行必须仍属于本家族
             if !key_in_family(current_key, keys) {
-                return Err(ApiError::Internal(anyhow::anyhow!(
+                return Err(ApiError::BadRequest(format!(
                     "line {index} no longer belongs to family {:?}",
                     input.family
                 )));
@@ -695,6 +713,12 @@ group-end
         assert!(validate_conf_line("cache-size", "abc").is_err());
         assert!(validate_conf_line("no-such-key", "1").is_err());
         assert!(validate_conf_line("cache-size", "1\nserver 1.2.3.4").is_err());
+        // N-6 回归：值含 " #" 会被 split_conf_line 误拆为尾注释，
+        // round-trip 后值被截断——必须在写入前拒绝
+        assert!(validate_conf_line("cache-size", "1024 # injected").is_err());
+        assert!(validate_conf_line("cache-size", "1024\t# tab").is_err());
+        // '#' 前无空白不是注释（nftset 规格），应放行
+        assert!(validate_conf_line("nftset", "/a.com/#4:ip#t#s").is_ok());
     }
 
     #[test]

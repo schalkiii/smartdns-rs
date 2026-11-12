@@ -132,7 +132,7 @@ smartdns-rs/
 | 7-1 | webui/out/（40 个入库产物文件）、.gitignore:64-70 | webui/out 入库决策有依据（RustEmbed 编译期需要该目录，入库保证 clone 即可编译，CI 构建后覆盖）。代价：a) 前端改动产生带哈希文件名的大量 diff 噪声；b) 构建非确定性（Next chunk 哈希），易生无意义冲突；c) 曾因此出过事故（507455d6 修「静态产物入库损坏（TSD 污染）」）；d) **无产物与源码同步性校验**——忘记重新 build 就 cargo build 会嵌入旧 UI | 中 | 仓库卫生、构建一致性 |
 | 7-2 | webui/package.json、.github/workflows/web-ui.yml | webui 无 lint/typecheck 门禁：无 eslint 配置、CI 只 build，TypeScript 错误只在 next build 顺带检查 | 中 | 前端代码质量 |
 | 7-3 | .github/workflows/web-ui.yml:71-75、test.yml | web-ui.yml 的 paths 触发含 `src/**`（纯 Rust 改动也触发前端构建 job）；Test workflow 不跑 webui 相关检查，adblock 后端逻辑变更不触发前端验证 | 中 | CI 效率与覆盖联动 |
-| 7-4 | 仓库根目录 | 杂物：PERFORMANCE_REVIEW.html、CACHE_HITRATE_AUDIT_V3.html、replay.sh、vibe-coding.sh、RESOLVE_EXAMPLES.txt、swagger-ui.html、logs/smartdns-test.cache 残留；**localhost.key 私钥入库**（gitignore 中有意注释放行，dev 自签证书风险低，但 .key 入库非好实践） | 低 | 仓库卫生、安全习惯 |
+| 7-4 | 仓库根目录 | 杂物：PERFORMANCE_REVIEW.html、CACHE_HITRATE_AUDIT_V3.html、replay.sh、vibe-coding.sh、logs/smartdns-test.cache 残留；**localhost.key 私钥入库**（gitignore 中有意注释放行，dev 自签证书风险低，但 .key 入库非好实践）。**审计更正（2026-11-12）**：swagger-ui.html（openapi.rs `include_str!`）与 RESOLVE_EXAMPLES.txt（resolver.rs `after_help`）为编译期依赖，不是杂物 | 低 | 仓库卫生、安全习惯 |
 | 7-5 | docs/ | 内部过程文档（两份历史 AUDIT-REPORT、EVAL 评估）与用户文档混放；任务描述中的 `doc/` 实际为 `docs/` | 低 | 文档组织 |
 | 7-6 | Cargo.toml:44-45、src/updater.rs:64-65 | homepage/repository 仍指向上游 mokeyish/smartdns-rs，未反映 fork 身份；self-update 也指向上游 repo——fork 用户 `smartdns update` 会装到**上游版本** | 低（当前）/ 高（发布后） | fork 用户升级安全 |
 
@@ -229,3 +229,51 @@ smartdns-rs/
 | 6 测试严谨性 | 1 | 1 | 2 | 4 |
 | 7 工程规范 | 0 | 3 | 3 | 6 |
 | **合计** | **5** | **17** | **17** | **39** |
+
+---
+
+## 五、增量审计（2026-11-12，基线 `507455d6` → `8f0e003f`）
+
+远端新增 4 提交：`756002da`（审查修复 TCP 背压/拦截统计/邻居缓存/订阅 API 安全）、
+`759a3144`（conf_dir 推导修复）、`db45d5a0`（订阅保存卡死与日志丢失修复）、
+`8f0e003f`（全量配置设置页 + routes! 按路径拆分）。本节核对上述提交对原 39 项问题
+的影响，并登记新增代码的审计发现。
+
+### 5.1 原有问题状态变化
+
+| 原编号 | 原状态 | 新状态 | 依据 |
+| --- | --- | --- | --- |
+| 4-1（update 静默吞 URL 错） | 高危未修 | **已修复（2026-11-12）**：update 路径与 create 共用 `parse_subscription_url`（Url::parse 失败显式 400 + scheme 限定 http/https），静默 fallback 已消除 | 本轮 P0-1 实施 |
+| 4-1（interval 无法清除） | 高危未修 | **已修复（2026-11-12）**：`UpdateDomainSet.interval` 改 `Option<Option<usize>>`（serde default + deserialize_with 区分「未传」与「传 null」），未传=保留、null=清除、数字=设新值 | 本轮 P0-1 实施 |
+| 4-2（500 代替 400） | 中危未修 | **已修复（2026-11-12）**：ApiError 新增 `BadRequest(String)`（400）；domain_set/config 两模块全部客户端输入错误（非法 URL、名称重复、未知 content_type、unknown family/key、缺 index、行非配置行等）统一改 400 | 本轮 P0-1 实施 |
+| 3-2（routes! workaround） | 中危 | **已根治**：根因查明（fork 宏折叠语义），全部模块按路径拆分，AGENTS.md 补记规约（8f0e003f）。复查 src/api 全部 14 个 routes()：serve_dns.rs 的 GET+POST 同路径合并属规约允许写法，均合规 | 逐文件 grep 核查 |
+| 5-1（src/api 零测试） | 高危 | **部分缓解**：src/api/config.rs 新增 9 个单元测试（split/apply/validate/family 全覆盖纯函数）；**domain_set.rs 已补 10 个单元测试（2026-11-12）**：URL/scheme/名称/路径校验 + 双层 interval 语义 + 配置 round-trip + address 联动行 | cargo test（本轮新增 10） |
+| 6-1（影子测试） | 高危 | **未修**：tests/stats_test.rs 仍是同构副本结构 | 文件核对 |
+| 7-3（CI 覦盖联动）、7-2（webui 无 lint） | 中危 | 未修 | — |
+| 7-4（仓库杂物/localhost.key） | 低危 | **已修复（2026-11-12）**：删除 PERFORMANCE_REVIEW.html、CACHE_HITRATE_AUDIT_V3.html、replay.sh、vibe-coding.sh、localhost.key（本地保留，gitignore 恢复忽略），清理 logs/smartdns-test.cache。**审计更正：swagger-ui.html 与 RESOLVE_EXAMPLES.txt 为 include_str! 编译期依赖，保留** | git rm + checkout 恢复验证 |
+| 1-1（README 无 adblock） | 高危 | 未修（README 只补了设置页描述，adblock/domain-set 仍零提及） | README 核对 |
+| N-6（value 含 # round-trip 破坏） | 中危 | **已修复（2026-11-12）**：`validate_conf_line` 增加 round-trip 检查，重建行经 split_conf_line 回读值必须一致；nftset 无空白 `#` 不受影响 | 本轮实施 + 回归测试 |
+
+### 5.2 新增代码审计发现（8f0e003f 的 config.rs / config-catalog.ts 等）
+
+| # | 位置 | 问题描述 | 严重程度 |
+| --- | --- | --- | --- |
+| N-1 | src/api/config.rs:272-332 `apply_scalar_updates` | **新增/追加路径不感知 group 边界**：`updates` 中的键若在 group 块内出现过（被正确跳过）、在全局从未出现，会在文件末尾追加全局行——行为正确；但若该键**只在 group 内有值**，追加后全局生效会改变实际语义（原 group 内行为不变，新增全局行对全部查询生效）。低概率场景（同键既在 group 内又在 updates 中），记录备查 | 低 |
+| N-2 | src/api/config.rs:328-330 | `apply_scalar_updates` 尾部换行处理：`text.ends_with('\n') \|\| !updates.is_empty()` ——空 updates 且原文本无尾换行时不补；但**有 updates 且原文本无尾换行**时会补一个。行为无害但条件语义混杂（updates 非空必然重写，此时统一补尾换行合理），仅记录 | 低 |
+| N-3 | src/api/config.rs:539-577 post_lines Update | **跨家族 key 切换已守卫**（index 行必须仍属本家族）；但 update 把行替换为新 key 后**不校验新行与文件中其它同 key 行的组合语义**（如两条 `bind [::]:53` 重复监听，启动 reload 会失败）。reload 失败时配置已落盘——原子写保证了不截断，但**未做「校验通过才 reload、reload 失败回滚文件」**，配置文件与运行态可能出现静默漂移（reload 失败仅日志，文件保持新值）。与 domain_set.rs 的 update 同模式，属系统性取舍：**写盘成功 + reload 失败 → 磁盘与运行态不一致**，需要用户二次手动 reload。建议后续统一加「reload 失败回滚或返回 5xx 警示」 | 中 |
+| N-4 | src/api/config.rs:63-141 SCALAR_KEYS vs webui config-catalog.ts | **已对账**：77 键逐一 diff 完全一致（含别名归一化）。此项通过，无问题 | — |
+| N-5 | webui/src/lib/config-catalog.ts | helper 函数（`text()/num()/bool()`）与对象字面量（select 项用 `key:` 字段）**两种写法混用**，642 行内 75 项中 70 项走 helper、5 项 select 走字面量。补一个 `select()` helper 可统一 | 低 |
+| N-6 | src/api/config.rs:236 split_conf_line | 尾注释判定 `rest.find(" #")` 或 `rest.find("\\t#")`：`" #"`（空格+井号）已覆盖 `\\t#` 前有 `\\t` 的场景吗？——`find(" #")` 匹配**任意位置**第一个 `" #"`，若值本身含 ` #`（如 `server-name # 主机名`）会被误判为注释分界。但 put_options 已拦截值含 `#`（:408-411），add/update lines 未拦 value 含 `#`——**post_lines 的 value 含 `" #"` 时会被 split 拆成值+注释，回读时注释丢失进 value**（round-trip 破坏）。触发条件：用户在行编辑器里输入含 ` #` 的值 | 中 |
+| N-7 | src/api/config.rs:386-387 get_options | `conf_file: Some(file.to_string_lossy()...)` 恒为 Some（read_conf_file 失败已提前返错）——字段建模为 Option 但实际恒 Some，轻微建模冗余 | 低 |
+| N-8 | webui/src/lib/api.ts useMutateConfigLines / SettingsTab | 未审查到测试（webui 整体 0 测试延续，属原 5-3 范围）；SettingsTab.tsx 430 行含 77 项渲染与批量保存逻辑，属前端最大单文件，后续拆分候选 | 低 |
+
+### 5.3 增量审计结论
+
+- **8f0e003f 整体质量高**：真实 parse_config 校验、原子写、串行锁、陈旧索引守卫、
+  77 键对账、9 个纯函数单测——新代码本身没引入高危问题。
+- **P0-1 的两个核心点（update 静默吞 URL 错 + interval 无法清除）已随本轮实施修复**
+  （2026-11-12，见 5.1 表状态更新）；N-6 同轮修复。N-3（reload 失败不回滚）
+  仍开放，属系统性取舍，建议单独排期。
+- 测试基线：**411 通过 / 0 失败 / 13 ignored**（较上次 399+13 净增 12，与 config.rs
+  新增 9 测试 + dnsmasq/dns_mw_addr 新增 3 测试吻合）。本轮 P0-1/N-6 再增
+  10 + 0 个测试（domain_set.rs 10 个，config.rs 扩充 3 断言至原用例内）。

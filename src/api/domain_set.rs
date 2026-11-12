@@ -69,8 +69,21 @@ struct UpdateDomainSet {
     new_name: Option<String>,
     /// 新订阅 URL
     url: Option<String>,
-    /// 新自动更新间隔
-    interval: Option<usize>,
+    /// 新自动更新间隔：None = 未传（保留原值）；Some(None) = 显式清除；
+    /// Some(Some(n)) = 设为新值。serde 默认对 null 和缺省都给 None，
+    /// 需 default + deserialize_with 组合才能区分「未传」与「传 null」
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    interval: Option<Option<usize>>,
+}
+
+/// `Option<Option<T>>` 反序列化：字段出现（含 null）→ Some(内层)，
+/// 字段缺省（由 serde(default) 兜底）→ None。
+fn deserialize_double_option<'de, T, D>(de: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    Deserialize::deserialize(de).map(Some)
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -132,7 +145,7 @@ async fn create(
 
     // 名称唯一性检查
     if find_provider_idx(&config, &input.name).is_some() {
-        return Err(ApiError::Internal(anyhow::anyhow!(
+        return Err(ApiError::BadRequest(format!(
             "domain-set name '{}' already exists",
             input.name
         )));
@@ -188,9 +201,8 @@ async fn update(
 
     // 改名时检查新名称冲突
     if new_name != input.name && find_provider_idx(&config, &new_name).is_some() {
-        return Err(ApiError::Internal(anyhow::anyhow!(
-            "domain-set name '{}' already exists",
-            new_name
+        return Err(ApiError::BadRequest(format!(
+            "domain-set name '{new_name}' already exists"
         )));
     }
 
@@ -202,6 +214,21 @@ async fn update(
         unreachable!();
     };
 
+    // 与 create 路径同强度校验：非法 URL 显式报 400，杜绝静默 fallback 旧值
+    let new_url = match input.url.as_deref() {
+        Some(u) => parse_subscription_url(u)?,
+        None => match old {
+            DomainSetProvider::Http(h) => h.url.clone(),
+            // file provider 不存在 url 字段；update 语义只对 http 订阅开放
+            DomainSetProvider::File(_) => {
+                return Err(ApiError::BadRequest(format!(
+                    "domain-set '{}' is a file provider, url update not supported",
+                    input.name
+                )));
+            }
+        },
+    };
+
     let new_provider = match old {
         DomainSetProvider::File(f) => DomainSetProvider::File(DomainSetFileProvider {
             name: new_name.clone(),
@@ -210,12 +237,8 @@ async fn update(
         }),
         DomainSetProvider::Http(h) => DomainSetProvider::Http(DomainSetHttpProvider {
             name: new_name.clone(),
-            url: input
-                .url
-                .as_deref()
-                .and_then(|u| Url::parse(u).ok())
-                .unwrap_or_else(|| h.url.clone()),
-            interval: input.interval.or(h.interval),
+            url: new_url,
+            interval: input.interval.unwrap_or(h.interval),
             content_type: h.content_type.clone(),
         }),
     };
@@ -343,22 +366,14 @@ fn build_provider(input: &CreateDomainSet) -> Result<DomainSetProvider, ApiError
         "" | "list" => DomainSetContentType::List,
         "adblock" => DomainSetContentType::Adblock,
         other => {
-            return Err(ApiError::Internal(anyhow::anyhow!(
+            return Err(ApiError::BadRequest(format!(
                 "unknown content type: {other} (expect list/adblock)"
             )));
         }
     };
 
     if let Some(url) = &input.url {
-        let url =
-            Url::parse(url).map_err(|e| ApiError::Internal(anyhow::anyhow!("invalid url: {e}")))?;
-        // 订阅下载只允许 http/https，杜绝 file:// 等 scheme 读本地任意文件
-        if !matches!(url.scheme(), "http" | "https") {
-            return Err(ApiError::Internal(anyhow::anyhow!(
-                "unsupported url scheme: {} (expect http/https)",
-                url.scheme()
-            )));
-        }
+        let url = parse_subscription_url(url)?;
         Ok(DomainSetProvider::Http(DomainSetHttpProvider {
             name: input.name.clone(),
             url,
@@ -368,7 +383,7 @@ fn build_provider(input: &CreateDomainSet) -> Result<DomainSetProvider, ApiError
     } else if let Some(file) = &input.file {
         // 序列化按空格分词：含空白/控制字符的路径会破坏 round-trip
         if file.is_empty() || file.chars().any(|c| c.is_whitespace() || c.is_control()) {
-            return Err(ApiError::Internal(anyhow::anyhow!(
+            return Err(ApiError::BadRequest(format!(
                 "invalid file path: {file:?} (whitespace/control chars not allowed)"
             )));
         }
@@ -378,10 +393,24 @@ fn build_provider(input: &CreateDomainSet) -> Result<DomainSetProvider, ApiError
             content_type,
         }))
     } else {
-        Err(ApiError::Internal(anyhow::anyhow!(
-            "either url or file is required"
-        )))
+        Err(ApiError::BadRequest(
+            "either url or file is required".to_string(),
+        ))
     }
+}
+
+/// 订阅 URL 校验（create/update 共用）：Url::parse 必须成功，且 scheme
+/// 限定 http/https——杜绝 file:// 等 scheme 读本地任意文件。
+fn parse_subscription_url(input: &str) -> Result<Url, ApiError> {
+    let url =
+        Url::parse(input).map_err(|e| ApiError::BadRequest(format!("invalid url: {e}")))?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(ApiError::BadRequest(format!(
+            "unsupported url scheme: {} (expect http/https)",
+            url.scheme()
+        )));
+    }
+    Ok(url)
 }
 
 /// name 会原样序列化进配置行并被 `domain-set:<name>` 引用：
@@ -393,7 +422,7 @@ fn validate_name(name: &str) -> Result<(), ApiError> {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
     {
-        return Err(ApiError::Internal(anyhow::anyhow!(
+        return Err(ApiError::BadRequest(format!(
             "invalid domain-set name: {name:?} (expect 1-64 chars of [A-Za-z0-9_-])"
         )));
     }
@@ -507,4 +536,273 @@ fn link_address_rule(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 临时目录 + domain-set.conf + address.conf 组成的最小托管环境。
+    /// 结构体持有目录路径，Drop 时递归清理，避免测试间残留。
+    struct TempManagedDir {
+        dir: std::path::PathBuf,
+    }
+
+    impl TempManagedDir {
+        fn new(tag: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "smartdns-domain-set-test-{}-{tag}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            Self { dir }
+        }
+
+        fn write_domain_set_conf(&self, text: &str) {
+            std::fs::write(self.dir.join("domain-set.conf"), text).unwrap();
+        }
+
+        fn read_domain_set_conf(&self) -> String {
+            std::fs::read_to_string(self.dir.join("domain-set.conf")).unwrap()
+        }
+    }
+
+    impl Drop for TempManagedDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    #[test]
+    fn test_parse_subscription_url_rejects_invalid() {
+        // 非法 URL
+        assert!(parse_subscription_url("not a url").is_err());
+        // scheme 限定 http/https
+        assert!(parse_subscription_url("file:///etc/passwd").is_err());
+        assert!(parse_subscription_url("ftp://example.com/list.txt").is_err());
+        // 合法
+        assert!(parse_subscription_url("https://example.com/list.txt").is_ok());
+        assert!(parse_subscription_url("http://example.com/list.txt").is_ok());
+    }
+
+    #[test]
+    fn test_build_provider_validates_name() {
+        let input = CreateDomainSet {
+            name: "bad name!".to_string(),
+            url: Some("https://example.com/list.txt".to_string()),
+            file: None,
+            content_type: "list".to_string(),
+            interval: None,
+        };
+        assert!(matches!(
+            build_provider(&input),
+            Err(ApiError::BadRequest(_))
+        ));
+    }
+
+    #[test]
+    fn test_build_provider_requires_url_or_file() {
+        let input = CreateDomainSet {
+            name: "ads".to_string(),
+            url: None,
+            file: None,
+            content_type: "list".to_string(),
+            interval: None,
+        };
+        assert!(matches!(
+            build_provider(&input),
+            Err(ApiError::BadRequest(_))
+        ));
+    }
+
+    #[test]
+    fn test_build_provider_unknown_content_type() {
+        let input = CreateDomainSet {
+            name: "ads".to_string(),
+            url: Some("https://example.com/list.txt".to_string()),
+            file: None,
+            content_type: "hosts".to_string(),
+            interval: None,
+        };
+        assert!(matches!(
+            build_provider(&input),
+            Err(ApiError::BadRequest(_))
+        ));
+    }
+
+    #[test]
+    fn test_build_provider_rejects_file_path_with_whitespace() {
+        let input = CreateDomainSet {
+            name: "ads".to_string(),
+            url: None,
+            file: Some("path with space/list.txt".to_string()),
+            content_type: "list".to_string(),
+            interval: None,
+        };
+        assert!(matches!(
+            build_provider(&input),
+            Err(ApiError::BadRequest(_))
+        ));
+    }
+
+    /// update interval 双层 Option 语义：
+    /// - None（字段未传）→ 保留原值
+    /// - Some(None)（显式传 null）→ 清除
+    /// - Some(Some(n)) → 设为新值
+    /// 通过 serde_json 直接驱动反序列化，锁定 wire 协议语义。
+    #[test]
+    fn test_update_interval_double_option_semantics() {
+        let json = r#"{"name": "ads", "interval": null}"#;
+        let input: UpdateDomainSet = serde_json::from_str(json).unwrap();
+        assert_eq!(input.interval, Some(None));
+
+        let json = r#"{"name": "ads", "interval": 3600}"#;
+        let input: UpdateDomainSet = serde_json::from_str(json).unwrap();
+        assert_eq!(input.interval, Some(Some(3600)));
+
+        let json = r#"{"name": "ads"}"#;
+        let input: UpdateDomainSet = serde_json::from_str(json).unwrap();
+        assert_eq!(input.interval, None);
+
+        // 组合：interval 未传时 unwrap_or 保留原值
+        let old_interval = Some(86400usize);
+        assert_eq!(input.interval.unwrap_or(old_interval), Some(86400));
+        // 显式清除
+        let cleared: Option<Option<usize>> = Some(None);
+        assert_eq!(cleared.unwrap_or(old_interval), None);
+    }
+
+    /// update 后写回的配置行 round-trip：interval 清除场景。
+    /// 验证 Some(None) 语义最终落到配置文本（-interval 项消失）。
+    #[test]
+    fn test_update_clears_interval_in_config_round_trip() {
+        let tmp = TempManagedDir::new("clear-interval");
+        tmp.write_domain_set_conf(
+            "domain-set -type adblock -name ads -url https://example.com/list.txt -interval 86400\n",
+        );
+
+        let text = tmp.read_domain_set_conf();
+        let (_, mut config) = ConfigFile::parse(&text).map_err(|err| err.to_owned()).unwrap();
+        let idx = find_provider_idx(&config, "ads").unwrap();
+
+        let input: UpdateDomainSet =
+            serde_json::from_str(r#"{"name": "ads", "interval": null}"#).unwrap();
+
+        let ConfigLine::Config {
+            config: ConfigItem::DomainSetProvider(old),
+            ..
+        } = &config[idx]
+        else {
+            unreachable!();
+        };
+        let DomainSetProvider::Http(h) = old else {
+            unreachable!();
+        };
+
+        let new_provider = DomainSetProvider::Http(DomainSetHttpProvider {
+            name: "ads".to_string(),
+            url: h.url.clone(),
+            interval: input.interval.unwrap_or(h.interval),
+            content_type: h.content_type.clone(),
+        });
+        config[idx] = ConfigLine::Config {
+            config: ConfigItem::DomainSetProvider(new_provider),
+            comment: None,
+        };
+
+        write_provider_only(&tmp.dir.join("domain-set.conf"), &mut config).unwrap();
+        let out = tmp.read_domain_set_conf();
+        assert!(
+            out.contains("-url https://example.com/list.txt"),
+            "url preserved: {out}"
+        );
+        assert!(
+            !out.contains("-interval"),
+            "interval must be cleared: {out}"
+        );
+    }
+
+    /// update 后写回的配置行 round-trip：interval 改值场景（Some(Some(n))）。
+    #[test]
+    fn test_update_changes_interval_in_config_round_trip() {
+        let tmp = TempManagedDir::new("change-interval");
+        tmp.write_domain_set_conf(
+            "domain-set -type adblock -name ads -url https://example.com/list.txt -interval 86400\n",
+        );
+
+        let text = tmp.read_domain_set_conf();
+        let (_, mut config) = ConfigFile::parse(&text).map_err(|err| err.to_owned()).unwrap();
+        let idx = find_provider_idx(&config, "ads").unwrap();
+
+        let input: UpdateDomainSet =
+            serde_json::from_str(r#"{"name": "ads", "interval": 3600}"#).unwrap();
+
+        let ConfigLine::Config {
+            config: ConfigItem::DomainSetProvider(old),
+            ..
+        } = &config[idx]
+        else {
+            unreachable!();
+        };
+        let DomainSetProvider::Http(h) = old else {
+            unreachable!();
+        };
+
+        let new_provider = DomainSetProvider::Http(DomainSetHttpProvider {
+            name: "ads".to_string(),
+            url: h.url.clone(),
+            interval: input.interval.unwrap_or(h.interval),
+            content_type: h.content_type.clone(),
+        });
+        config[idx] = ConfigLine::Config {
+            config: ConfigItem::DomainSetProvider(new_provider),
+            comment: None,
+        };
+
+        write_provider_only(&tmp.dir.join("domain-set.conf"), &mut config).unwrap();
+        let out = tmp.read_domain_set_conf();
+        assert!(
+            out.contains("-interval 3600"),
+            "interval updated: {out}"
+        );
+    }
+
+    #[test]
+    fn test_find_provider_idx() {
+        let text = "\
+domain-set -type list -name a -url https://a.example.com/l.txt
+# comment
+domain-set -type adblock -name b -url https://b.example.com/l.txt -interval 60
+";
+        let (_, config) = ConfigFile::parse(text).map_err(|err| err.to_owned()).unwrap();
+        assert_eq!(find_provider_idx(&config, "a"), Some(0));
+        assert_eq!(find_provider_idx(&config, "b"), Some(2));
+        assert_eq!(find_provider_idx(&config, "c"), None);
+    }
+
+    #[test]
+    fn test_link_address_rule_add_and_remove() {
+        let tmp = TempManagedDir::new("link-address");
+
+        // 添加拦截行
+        link_address_rule(&tmp.dir, "ads", true).unwrap();
+        let text = std::fs::read_to_string(tmp.dir.join("address.conf")).unwrap();
+        assert!(text.contains("address /domain-set:ads/#"));
+
+        // 幂等：重复添加不产生重复行
+        link_address_rule(&tmp.dir, "ads", true).unwrap();
+        let text = std::fs::read_to_string(tmp.dir.join("address.conf")).unwrap();
+        assert_eq!(text.matches("domain-set:ads").count(), 1);
+
+        // 用户手写的 IP 绑定行不被误删
+        std::fs::write(
+            tmp.dir.join("address.conf"),
+            "address /domain-set:ads/#\naddress /domain-set:ads/192.168.1.1\n",
+        )
+        .unwrap();
+        link_address_rule(&tmp.dir, "ads", false).unwrap();
+        let text = std::fs::read_to_string(tmp.dir.join("address.conf")).unwrap();
+        assert!(!text.contains("/#"));
+        assert!(text.contains("address /domain-set:ads/192.168.1.1"));
+    }
 }

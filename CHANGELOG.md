@@ -4,6 +4,41 @@
 
 ## [Unreleased]
 
+### fix(api): 订阅 update 校验与错误语义修复（P0-1）
+
+审计 P0-1 三处缺陷一并修复，错误语义对齐 HTTP 标准：
+
+- `ApiError` 新增 `BadRequest(String)` 变体（400）：此前所有客户端输入
+  错误（非法 URL、名称重复、未知 content_type 等）都返 500。
+- update 路径 `Url::parse` 失败此前被静默吞掉、fallback 保留旧 URL，
+  用户改订阅地址失败却收到 204 成功——现显式报 400，且与 create 路径
+  共用 `parse_subscription_url`（scheme 限定 http/https）。
+- `UpdateDomainSet.interval` 改 `Option<Option<usize>>` 双层语义：
+  未传 = 保留原值，显式传 null = 清除自动更新，传数字 = 设新值。
+  此前前端清空输入框传 null 被旧代码当「未传」处理，永远无法清除。
+- `domain_set.rs` 补 10 个单元测试（此前 0 测试，P0-4）：URL/scheme/
+  名称/路径/双层 interval 语义 + 配置 round-trip + address 联动行。
+
+### fix(api): 配置行值含 `#` 的 round-trip 破坏拦截（N-6）
+
+`POST /config/lines` 的值含 `" #"` 时被尾注释规则误拆，写回再读出后值
+被截断。现 `validate_conf_line` 增加 round-trip 检查：重建行经
+`split_conf_line` 回读，值必须与输入一致，否则拒绝。nftset 的无空白
+`#`（如 `/a.com/#4:ip#t#s`）不受影响。config API 全部客户端错误从
+500 统一改 400。
+
+### chore: 移除仓库杂物与误入库的私钥
+
+- 删除根目录 4 个历史遗留杂物：`PERFORMANCE_REVIEW.html`、
+  `CACHE_HITRATE_AUDIT_V3.html`、`replay.sh`、`vibe-coding.sh`。
+- 删除 `localhost.key`（开发用私钥，.gitignore 原注释放行系失误），
+  恢复 .gitignore 对 localhost 证书的忽略。
+  ⚠️ git 历史中该私钥仍可见，仅为本地开发证书，如有顾虑需改密钥或
+  重写历史（需要 force push，暂未执行）。
+- 审计更正：`swagger-ui.html`（`openapi.rs include_str!`）与
+  `RESOLVE_EXAMPLES.txt`（`resolver.rs after_help`）为编译期依赖，
+  不是杂物，保留。
+
 ### feat(webui): 全量配置设置页（77 标量项 + 23 结构族，悬浮说明）
 
 - 新增「配置设置」页：按 11 个分组渲染 conf 全部 77 个单值选项
