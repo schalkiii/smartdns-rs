@@ -33,8 +33,8 @@ webui/.next
 
 /tmp
 
-# localhost.crt
-# localhost.key
+localhost.crt
+localhost.key
 
 *.local.*
 

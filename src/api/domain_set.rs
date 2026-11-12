@@ -402,8 +402,7 @@ fn build_provider(input: &CreateDomainSet) -> Result<DomainSetProvider, ApiError
 /// 订阅 URL 校验（create/update 共用）：Url::parse 必须成功，且 scheme
 /// 限定 http/https——杜绝 file:// 等 scheme 读本地任意文件。
 fn parse_subscription_url(input: &str) -> Result<Url, ApiError> {
-    let url =
-        Url::parse(input).map_err(|e| ApiError::BadRequest(format!("invalid url: {e}")))?;
+    let url = Url::parse(input).map_err(|e| ApiError::BadRequest(format!("invalid url: {e}")))?;
     if !matches!(url.scheme(), "http" | "https") {
         return Err(ApiError::BadRequest(format!(
             "unsupported url scheme: {} (expect http/https)",
@@ -682,7 +681,9 @@ mod tests {
         );
 
         let text = tmp.read_domain_set_conf();
-        let (_, mut config) = ConfigFile::parse(&text).map_err(|err| err.to_owned()).unwrap();
+        let (_, mut config) = ConfigFile::parse(&text)
+            .map_err(|err| err.to_owned())
+            .unwrap();
         let idx = find_provider_idx(&config, "ads").unwrap();
 
         let input: UpdateDomainSet =
@@ -731,7 +732,9 @@ mod tests {
         );
 
         let text = tmp.read_domain_set_conf();
-        let (_, mut config) = ConfigFile::parse(&text).map_err(|err| err.to_owned()).unwrap();
+        let (_, mut config) = ConfigFile::parse(&text)
+            .map_err(|err| err.to_owned())
+            .unwrap();
         let idx = find_provider_idx(&config, "ads").unwrap();
 
         let input: UpdateDomainSet =
@@ -761,10 +764,7 @@ mod tests {
 
         write_provider_only(&tmp.dir.join("domain-set.conf"), &mut config).unwrap();
         let out = tmp.read_domain_set_conf();
-        assert!(
-            out.contains("-interval 3600"),
-            "interval updated: {out}"
-        );
+        assert!(out.contains("-interval 3600"), "interval updated: {out}");
     }
 
     #[test]
@@ -774,7 +774,9 @@ domain-set -type list -name a -url https://a.example.com/l.txt
 # comment
 domain-set -type adblock -name b -url https://b.example.com/l.txt -interval 60
 ";
-        let (_, config) = ConfigFile::parse(text).map_err(|err| err.to_owned()).unwrap();
+        let (_, config) = ConfigFile::parse(text)
+            .map_err(|err| err.to_owned())
+            .unwrap();
         assert_eq!(find_provider_idx(&config, "a"), Some(0));
         assert_eq!(find_provider_idx(&config, "b"), Some(2));
         assert_eq!(find_provider_idx(&config, "c"), None);

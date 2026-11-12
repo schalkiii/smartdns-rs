@@ -529,8 +529,7 @@ async fn post_lines(
     if !key_in_family(&input.key, keys) {
         return Err(ApiError::BadRequest(format!(
             "key {:?} does not belong to family {:?}",
-            input.key,
-            input.family
+            input.key, input.family
         )));
     }
 
@@ -561,9 +560,7 @@ async fn post_lines(
                 .ok_or_else(|| ApiError::NotFound(format!("line index {index} out of range")))?;
             let (_, current_key, _, current_comment) =
                 split_conf_line(current).ok_or_else(|| {
-                    ApiError::BadRequest(format!(
-                        "line {index} is not a configuration line"
-                    ))
+                    ApiError::BadRequest(format!("line {index} is not a configuration line"))
                 })?;
             // 索引可能因并发编辑过期：目标行必须仍属于本家族
             if !key_in_family(current_key, keys) {
