@@ -637,7 +637,7 @@ git checkout -b feat/my-new-feature
 
 ### Pre-Submission Checklist
 
-Before submitting a PR/MR:
+Before submitting a PR/MR（**直接 push main 同样适用**——CI 对所有 push 跑同套检查）:
 * [ ] All tests pass: `just test`
 * [ ] Code is formatted: `just fmt`
 * [ ] No clippy warnings: `just clippy`
@@ -657,6 +657,20 @@ Before submitting a PR/MR:
 When making changes:
 1. Always **stage changes first** using `git add <files>`
 2. **DO NOT** run `git commit` without explicit user instruction
+
+### ⚠️ IMPORTANT: Push 前必须过 cleanliness（CI 硬门槛）
+
+Test workflow 的 `cleanliness` job 跑 `cargo fmt --check && cargo clippy --all-targets`，
+**任何** push 到 main（不只 PR）都会触发。提交前必须本地通过：
+
+```bash
+cargo fmt --check && cargo clippy --all-targets
+```
+
+教训（2026-11-12，commit f9fb5e03）：`cargo test` 全绿 ≠ 可以 push——测试通过但
+rustfmt 格式偏差照样让 CI 挂掉。**写完代码固定动作：`cargo fmt`（直接改）→
+`cargo clippy --all-targets`（零 warning）→ `cargo test` → 才可提交。**
+Edit 工具手改的代码最容易违反 fmt（多行换行/缩进与 rustfmt 期望不一致），肉眼无法判断，必须机器检查。
 3. Show the user what you've staged with `git diff --staged`
 4. Wait for user confirmation before committing
 5. Let the user review:
