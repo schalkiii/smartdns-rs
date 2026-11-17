@@ -18,3 +18,7 @@ jobs:
       contents: write
       packages: write
     uses: ./.github/workflows/build.yml
+    with:
+      # macOS 托管 runner 间歇性不可用（排队超时取消），nightly 把它设为 best-effort，
+      # 避免单个 macOS 任务取消把整 run 标红并连带跳过 build-docker。
+      macos_optional: true

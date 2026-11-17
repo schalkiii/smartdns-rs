@@ -16,6 +16,11 @@ on:
         type: boolean
         description: "Identify the release as a prerelease. Defaults to false"
         required: false
+      macos_optional:
+        type: boolean
+        description: "Treat macOS (darwin) build legs as best-effort. GitHub-hosted macOS runners are intermittently unavailable (queued >15min then cancelled with zero steps); when true a cancelled/failed macOS leg does not fail the run or block downstream jobs. Nightly builds enable this; tagged releases keep macOS mandatory."
+        required: false
+        default: false
 
   workflow_dispatch:
     inputs:
@@ -74,9 +79,11 @@ jobs:
           - target: x86_64-apple-darwin
             os: macos-15-intel
             archive: zip
+            optional: ${{ inputs.macos_optional }}
           - target: aarch64-apple-darwin
             os: macos-15-intel
             archive: zip
+            optional: ${{ inputs.macos_optional }}
           # ---------------- Linux (glibc) ----------------
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
