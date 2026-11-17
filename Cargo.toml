@@ -12,7 +12,6 @@ description = """
 A cross platform local DNS server written in rust to obtain the fastest website IP for the best Internet experience, support DoT, DoQ, DoH, DoH3.
 """
 
-homepage = "https://github.com/mokeyish/smartdns-rs"
 repository = "https://github.com/mokeyish/smartdns-rs"
 license = "GPL-3.0-only"
 readme = "README.md"
@@ -159,7 +158,6 @@ serde_json = { version = "1.0", optional = true }
 
 # async/await
 futures = { version = "0.3.5", default-features = false, features = ["std"] }
-futures-intrusive = "0.5"
 futures-util = { version = "0.3.5", default-features = false, features = ["std"] }
 async-trait = "0.1.80"
 tokio = { version = "1.46", features = [
